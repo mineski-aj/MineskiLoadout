@@ -175,7 +175,14 @@
 
   .canvas-wrap { flex: 1; position: relative; overflow: auto; background: var(--bg); cursor: default; }
   .canvas-wrap.panning, .canvas-wrap.panning * { cursor: grabbing !important; }
+  .canvas-wrap.space-pan, .canvas-wrap.space-pan * { cursor: grab !important; }
   .canvas-inner { position: relative; width: 4000px; height: 3000px; }
+  /* Zero-size sticky anchor: pins its child to the canvas viewport's
+     top-left corner (regardless of scroll/pan) without adding to
+     canvas-wrap's own scrollable layout flow. */
+  .undo-float-anchor { position: sticky; top: 0; left: 0; height: 0; width: 0; overflow: visible; z-index: 50; pointer-events: none; }
+  .undo-float-panel { position: absolute; top: 10px; left: 10px; display: flex; align-items: center; gap: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.35); pointer-events: auto; }
+  .undo-float-panel.collapsed .undo-float-item { display: none; }
   .marquee-box { position: absolute; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); pointer-events: none; z-index: 15; display: none; }
   .snap-guide { position: absolute; background: #ff3b8d; pointer-events: none; z-index: 16; display: none; }
   .snap-guide-v { width: 1px; }
@@ -313,6 +320,9 @@
   .export-dropdown { position: relative; display: inline-block; }
   .export-dropdown-menu { display: none; position: absolute; top: calc(100% + 4px); right: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 3px; z-index: 9999; min-width: 130px; box-shadow: 0 6px 24px rgba(0,0,0,0.55); white-space: nowrap; }
   .export-dropdown-menu.open { display: block; }
+  #settings-dropdown-menu.open { display: flex; }
+  #extras-dropdown-menu.open { display: flex; }
+  #extras-dropdown-menu .tab-btn { width: 100%; text-align: left; }
   .export-dropdown-item { padding: 7px 13px; font-size: 12px; border-radius: 4px; cursor: pointer; color: var(--text); }
   .export-dropdown-item:hover { background: var(--surface2); }
 
@@ -498,18 +508,49 @@
   <button class="btn btn-ghost btn-sm" id="btn-project-picker" onclick="openProjectsModal()" title="Open, save, or switch projects">📁 <span id="current-project-label">No project open</span> ▾</button>
   <span class="save-status" id="cloud-status" style="display:none"></span>
   <div class="topbar-sep"></div>
+  <div class="export-dropdown" id="file-dropdown">
+    <button class="btn btn-ghost btn-sm" onclick="toggleFileDropdown(event)">📁 File ▾</button>
+    <div class="export-dropdown-menu" id="file-dropdown-menu">
+      <div class="export-dropdown-item" onclick="importDiagram();closeFileDropdown()" title="Import diagram JSON">⬆ Import Diagram JSON</div>
+      <div style="height:1px;background:var(--border);margin:3px 0"></div>
+      <div class="export-dropdown-item" onclick="exportDiagram();closeFileDropdown()">⬇ Export JSON</div>
+      <div class="export-dropdown-item" onclick="exportPNG(this,false);closeFileDropdown()">🖼 PNG — Dark Background</div>
+      <div class="export-dropdown-item" onclick="exportPNG(this,true);closeFileDropdown()">🖼 PNG — Transparent</div>
+      <div class="export-dropdown-item" id="btn-export-pdf" onclick="exportPDF(this);closeFileDropdown()">📄 PDF — All Tabs</div>
+      <div style="height:1px;background:var(--border);margin:3px 0"></div>
+      <div class="export-dropdown-item" style="color:var(--danger)" onclick="clearAll();closeFileDropdown()">🗑 Clear All</div>
+    </div>
+  </div>
+  <div class="export-dropdown" id="settings-dropdown">
+    <button class="btn btn-ghost btn-sm" onclick="toggleSettingsDropdown(event)">⚙ Settings ▾</button>
+    <div class="export-dropdown-menu" id="settings-dropdown-menu" style="flex-direction:column;gap:4px;padding:6px;min-width:190px">
+      <button class="btn btn-ghost btn-sm" id="btn-toggle-labels" onclick="toggleCableLabels()" title="Show/hide cable label boxes" style="width:100%;text-align:left">🏷 Labels</button>
+      <button class="btn btn-ghost btn-sm" id="btn-line-style" onclick="toggleLineStyle()" title="Switch between curved and straight cable lines" style="width:100%;text-align:left">〰 Curved</button>
+      <button class="btn btn-ghost btn-sm" id="btn-toggle-flow" onclick="toggleFlowAnim()" title="Hide signal flow animation" style="width:100%;text-align:left">✨ Flow</button>
+      <div style="height:1px;background:var(--border);margin:2px 0"></div>
+      <div class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Switch between dark and light mode" style="justify-content:center;margin:2px auto 0">
+        <span class="theme-toggle-ico">🌙</span>
+        <span class="theme-toggle-track"><span class="theme-toggle-knob"></span></span>
+        <span class="theme-toggle-ico">☀</span>
+      </div>
+    </div>
+  </div>
+  <div class="topbar-sep"></div>
   <button class="tab-btn active" id="tab-d" onclick="switchTab('d')">Diagram</button>
   <button class="tab-btn" id="tab-e" onclick="switchTab('e')">Equipment List</button>
-  <button class="tab-btn" id="tab-bi" onclick="switchTab('bi')">🔌 Overall Broadcast Inventory</button>
   <button class="tab-btn" id="tab-io" onclick="switchTab('io')">I/O List</button>
-  <button class="tab-btn" id="tab-fp" onclick="switchTab('fp')">📐 Floorplan</button>
-  <button class="tab-btn" id="tab-comm" onclick="switchTab('comm')">📡 Comms Plotting</button>
-  <button class="tab-btn" id="tab-org" onclick="switchTab('org')">👥 Org Chart</button>
+  <div id="extra-tabs-inline" style="display:flex;align-items:center;gap:8px">
+    <button class="tab-btn" id="tab-bi" onclick="switchTab('bi')">🔌 Overall Broadcast Inventory</button>
+    <button class="tab-btn" id="tab-fp" onclick="switchTab('fp')">📐 Floorplan</button>
+    <button class="tab-btn" id="tab-comm" onclick="switchTab('comm')">📡 Comms Plotting</button>
+    <button class="tab-btn" id="tab-org" onclick="switchTab('org')">👥 Org Chart</button>
+  </div>
+  <div class="export-dropdown" id="extras-dropdown" style="display:none">
+    <button class="tab-btn" id="extras-dropdown-btn" onclick="toggleExtrasDropdown(event)">Extras ▾</button>
+    <div class="export-dropdown-menu" id="extras-dropdown-menu" style="flex-direction:column;gap:2px;padding:4px;min-width:220px"></div>
+  </div>
   <div class="topbar-right">
     <span class="save-status" id="save-status">Auto-saved</span>
-    <div class="topbar-sep"></div>
-    <button class="btn-icon" id="btn-undo" onclick="undo()" title="Undo (Ctrl+Z)" disabled>↩</button>
-    <button class="btn-icon" id="btn-redo" onclick="redo()" title="Redo (Ctrl+Y)" disabled>↪</button>
     <div class="topbar-sep"></div>
     <div style="display:flex;align-items:center;gap:3px">
       <button class="ctrl-btn" onclick="adjZoom(-0.1)" title="Zoom out">−</button>
@@ -525,31 +566,6 @@
       </select>
       <button class="ctrl-btn" onclick="adjZoom(0.1)" title="Zoom in">+</button>
     </div>
-    <div class="topbar-sep"></div>
-    <button class="btn btn-ghost btn-sm" id="btn-toggle-labels" onclick="toggleCableLabels()" title="Show/hide cable label boxes">🏷 Labels</button>
-    <button class="btn btn-ghost btn-sm" id="btn-line-style" onclick="toggleLineStyle()" title="Switch between curved and straight cable lines">〰 Curved</button>
-    <div class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Switch between dark and light mode">
-      <span class="theme-toggle-ico">🌙</span>
-      <span class="theme-toggle-track"><span class="theme-toggle-knob"></span></span>
-      <span class="theme-toggle-ico">☀</span>
-    </div>
-    <button class="btn btn-ghost btn-sm" id="btn-toggle-flow" onclick="toggleFlowAnim()" title="Hide signal flow animation">✨ Flow</button>
-    <div class="topbar-sep"></div>
-    <button class="btn btn-ghost btn-sm" onclick="importDiagram()" title="Import diagram JSON">⬆ Import</button>
-    <div class="export-dropdown" id="export-dropdown">
-      <button class="btn btn-ghost btn-sm" onclick="toggleExportDropdown(event)">⬇ Export ▾</button>
-      <div class="export-dropdown-menu" id="export-dropdown-menu">
-        <div class="export-dropdown-item" onclick="exportDiagram();closeExportDropdown()">⬇ Export JSON</div>
-        <div style="height:1px;background:var(--border);margin:3px 0"></div>
-        <div class="export-dropdown-item" onclick="exportPNG(this,false);closeExportDropdown()">🖼 PNG — Dark Background</div>
-        <div class="export-dropdown-item" onclick="exportPNG(this,true);closeExportDropdown()">🖼 PNG — Transparent</div>
-        <div style="height:1px;background:var(--border);margin:3px 0"></div>
-        <div class="export-dropdown-item" id="btn-export-pdf" onclick="exportPDF(this);closeExportDropdown()">📄 PDF — All Tabs</div>
-      </div>
-    </div>
-    <div class="topbar-sep"></div>
-    <button class="btn btn-ghost btn-sm" onclick="clearAll()">Clear</button>
-    <button class="btn btn-primary btn-sm" onclick="switchTab('e')">📋 Equip. List</button>
   </div>
 </div>
 
@@ -701,6 +717,14 @@
   </div>
 
   <div class="canvas-wrap" id="canvas-wrap">
+    <div class="undo-float-anchor">
+      <div class="undo-float-panel" id="undo-float-panel">
+        <button class="btn-icon undo-float-item" id="btn-undo" onclick="undo()" title="Undo (Ctrl+Z)" disabled>↩</button>
+        <button class="btn-icon undo-float-item" id="btn-redo" onclick="redo()" title="Redo (Ctrl+Y)" disabled>↪</button>
+        <div class="topbar-sep undo-float-item"></div>
+        <button class="btn-icon" id="undo-float-collapse-btn" onclick="toggleUndoFloatPanel()" title="Hide undo/redo controls">‹</button>
+      </div>
+    </div>
     <div class="marquee-box" id="marquee-box"></div>
     <div class="snap-guide snap-guide-v" id="snap-guide-v"></div>
     <div class="snap-guide snap-guide-h" id="snap-guide-h"></div>
@@ -1335,6 +1359,8 @@ let history = [], histIdx = -1;
 let flowEnabled = (() => { try { return localStorage.getItem('bfw_flow_enabled') !== '0'; } catch(e) { return true; } })();
 let flowRAF = null;
 let panning = null; // {startX, startY, startScrollLeft, startScrollTop}
+let spaceHeld = false;    // true while spacebar is held down over the canvas
+let spacePanning = false; // true while a space+drag pan is in progress
 // 'curved' = smooth bezier cables (default), 'straight' = straight-segment polylines through the same bend points
 let lineStyle = (() => { try { return localStorage.getItem('bfw_line_style') === 'straight' ? 'straight' : 'curved'; } catch(e) { return 'curved'; } })();
 
@@ -1421,6 +1447,22 @@ function updateUndoRedo() {
   document.getElementById('btn-undo').disabled = histIdx <= 0;
   document.getElementById('btn-redo').disabled = histIdx >= history.length - 1;
 }
+
+let undoPanelCollapsed = (() => { try { return localStorage.getItem('bfw_undo_panel_collapsed') === '1'; } catch(e) { return false; } })();
+function applyUndoPanelState() {
+  const panel = document.getElementById('undo-float-panel');
+  const btn = document.getElementById('undo-float-collapse-btn');
+  if (!panel || !btn) return;
+  panel.classList.toggle('collapsed', undoPanelCollapsed);
+  btn.textContent = undoPanelCollapsed ? '›' : '‹';
+  btn.title = undoPanelCollapsed ? 'Show undo/redo controls' : 'Hide undo/redo controls';
+}
+function toggleUndoFloatPanel() {
+  undoPanelCollapsed = !undoPanelCollapsed;
+  try { localStorage.setItem('bfw_undo_panel_collapsed', undoPanelCollapsed ? '1' : '0'); } catch(e) {}
+  applyUndoPanelState();
+}
+applyUndoPanelState();
 
 function applySnapshot(snap) {
   nodes.forEach(n => { const el=document.getElementById('node-'+n.id); if(el) el.remove(); });
@@ -1596,6 +1638,7 @@ function toggleSec(hdr) {
 // ============================================================
 function switchTab(t) {
   ['d','e','bi','io','fp','comm','org'].forEach(k => document.getElementById('tab-'+k).classList.toggle('active', t===k));
+  document.getElementById('extras-dropdown-btn').classList.toggle('active', ['bi','fp','comm','org'].includes(t));
   CW.style.display = t==='d' ? '' : 'none';
   document.getElementById('equip-panel').classList.toggle('active', t==='e');
   document.getElementById('bi-panel').classList.toggle('active', t==='bi');
@@ -1615,6 +1658,7 @@ function switchTab(t) {
   if (t==='io') renderIOList();
   if (t==='comm') renderCommPlot();
   if (t==='org') renderOrgChart();
+  closeExtrasDropdown();
 }
 
 // ============================================================
@@ -1834,11 +1878,13 @@ function buildNodeHTML(node) {
 }
 
 function bindNodeEvents(el, node) {
-  // Drag — only from header, only when title is not being edited
+  // Drag — from anywhere on the node body, except controls that need their own
+  // mousedown behavior (ports and resize handles stop propagation themselves,
+  // below) or a field that's actively being edited.
   const header = el.querySelector('.node-header');
-  header.addEventListener('mousedown', e => {
-    if (e.target.classList.contains('node-close')) return;
-    if (e.target.classList.contains('node-title') && e.target.contentEditable === 'true') return;
+  el.addEventListener('mousedown', e => {
+    if (e.target.closest('.node-close')) return;
+    if (e.target.closest('[contenteditable="true"]')) return;
     e.stopPropagation();
     if (e.shiftKey || e.ctrlKey || e.metaKey) {
       if (selNodes.has(node.id)) {
@@ -1907,12 +1953,16 @@ function bindNodeEvents(el, node) {
     });
   });
 
-  if (node.type === 'group') {
-    const titleSpan = el.querySelector('.node-title');
-    if (titleSpan) {
-      titleSpan.addEventListener('dblclick', e => { e.stopPropagation(); startRename(node.id); });
-    }
-  }
+  // Bound to the whole header (not just .node-title) because the base
+  // equipment-name text has pointer-events:none and sits in a separate
+  // flex region from the title span — double-clicking the visible name
+  // itself would otherwise land on the header background and miss a
+  // listener scoped to just the title.
+  header.addEventListener('dblclick', e => {
+    if (e.target.closest('.node-close')) return;
+    e.stopPropagation();
+    startRename(node.id);
+  });
 
   el.querySelectorAll('.port-lbl').forEach(lbl => {
     lbl.addEventListener('dblclick', e => {
@@ -3024,6 +3074,7 @@ document.addEventListener('mousemove', e => {
 document.addEventListener('mouseup', e => {
   if (panning) {
     panning = null;
+    spacePanning = false;
     CW.classList.remove('panning');
   }
   if (marquee) {
@@ -3056,6 +3107,33 @@ document.addEventListener('mouseup', e => {
   if (resizeNode) { pushHistory(); resizeNode=null; }
   if (connFrom) { connFrom=null; document.getElementById('drag-ln').style.display='none'; }
 });
+
+// Clicking anywhere in the canvas returns keyboard focus to it. Without
+// this, a control elsewhere on the page (e.g. the sidebar equipment search
+// box) can stay focused even after the click — a mousedown that goes on to
+// preventDefault() (marquee-select, panning) suppresses the browser's usual
+// auto-blur of the previously focused element — so every shortcut gated on
+// "is the user typing somewhere" (Space-to-pan, Delete, Ctrl+Z, ...) keeps
+// treating the canvas as if focus were still in that search box.
+CW.addEventListener('mousedown', () => {
+  const ae = document.activeElement;
+  if (ae && ae !== document.body && !CW.contains(ae) && typeof ae.blur === 'function') {
+    ae.blur();
+  }
+}, {capture: true});
+
+// Space+drag "grab" panning — runs in the capture phase so it intercepts
+// the click before it reaches a node/port/handle's own mousedown handler,
+// letting you pan by dragging from anywhere on the canvas (not just empty
+// background) while spacebar is held, like Figma/Photoshop's grab tool.
+CW.addEventListener('mousedown', e => {
+  if (!spaceHeld || e.button !== 0) return;
+  panning = {startX:e.clientX, startY:e.clientY, startScrollLeft:CW.scrollLeft, startScrollTop:CW.scrollTop};
+  spacePanning = true;
+  CW.classList.add('panning');
+  e.preventDefault();
+  e.stopPropagation();
+}, {capture: true});
 
 CW.addEventListener('mousedown', e => {
   if (e.target===CW||e.target.classList.contains('canvas-grid')||e.target.id==='node-layer') {
@@ -3105,6 +3183,12 @@ document.addEventListener('keydown', e => {
   }
   if (isEditing) return;
 
+  if (e.code === 'Space' && !e.repeat) {
+    spaceHeld = true;
+    CW.classList.add('space-pan');
+  }
+  if (e.code === 'Space') e.preventDefault(); // don't let the page scroll on spacebar
+
   if ((e.ctrlKey||e.metaKey) && e.key==='c') {
     if (selNode) {
       const orig = nodes.find(x => x.id === selNode);
@@ -3148,6 +3232,21 @@ document.addEventListener('keydown', e => {
     else if (selEdge) { const id=selEdge; deselectEdge(); pushHistory(); edges=edges.filter(x=>x.id!==id); removeEdgeEl(id); updateAllPCPortStates(); }
   }
 });
+
+function releaseSpacePan() {
+  spaceHeld = false;
+  CW.classList.remove('space-pan');
+  if (spacePanning) {
+    spacePanning = false;
+    panning = null;
+    CW.classList.remove('panning');
+  }
+}
+document.addEventListener('keyup', e => { if (e.code === 'Space') releaseSpacePan(); });
+// Safety net: if focus/window is lost while space is physically held (alt-tab,
+// clicking a native dialog, devtools, ...) the keyup above never fires — drop
+// out of pan mode so it doesn't get stuck on.
+window.addEventListener('blur', releaseSpacePan);
 
 // ============================================================
 // CONTEXT MENU
@@ -3419,6 +3518,7 @@ function renderEquipList() {
     <div class="eq-sub">${nodes.length} device(s) · ${edges.length} cable run(s)</div>
     <div class="export-bar">
       <button class="btn btn-primary btn-sm" onclick="exportCSV()">⬇ Export CSV</button>
+      <button class="btn btn-ghost btn-sm" onclick="copyEquipList(this)">📋 Copy List</button>
       <button class="btn btn-ghost btn-sm" onclick="exportDiagram()">⬇ Export Diagram</button>
       <button class="btn btn-ghost btn-sm" onclick="window.print()">🖨 Print</button>
     </div>`;
@@ -3692,14 +3792,76 @@ function togglePCPeri(nodeId, key, checked) {
   renderEquipList();
 }
 
-function toggleExportDropdown(e) {
+function toggleFileDropdown(e) {
   e.stopPropagation();
-  document.getElementById('export-dropdown-menu').classList.toggle('open');
+  document.getElementById('file-dropdown-menu').classList.toggle('open');
 }
-function closeExportDropdown() {
-  document.getElementById('export-dropdown-menu').classList.remove('open');
+function closeFileDropdown() {
+  document.getElementById('file-dropdown-menu').classList.remove('open');
 }
-document.addEventListener('click', () => closeExportDropdown());
+document.addEventListener('click', () => closeFileDropdown());
+
+function toggleSettingsDropdown(e) {
+  e.stopPropagation();
+  document.getElementById('settings-dropdown-menu').classList.toggle('open');
+}
+function closeSettingsDropdown() {
+  document.getElementById('settings-dropdown-menu').classList.remove('open');
+}
+// Unlike the Export menu (one-shot actions that close it), Settings holds
+// toggles you might flip more than one of in a row — so a click on an item
+// inside the menu keeps it open, and only a click outside closes it.
+document.addEventListener('click', e => {
+  if (!document.getElementById('settings-dropdown').contains(e.target)) closeSettingsDropdown();
+});
+
+function toggleExtrasDropdown(e) {
+  e.stopPropagation();
+  document.getElementById('extras-dropdown-menu').classList.toggle('open');
+}
+function closeExtrasDropdown() {
+  document.getElementById('extras-dropdown-menu').classList.remove('open');
+}
+document.addEventListener('click', e => {
+  if (!document.getElementById('extras-dropdown').contains(e.target)) closeExtrasDropdown();
+});
+
+// ============================================================
+// RESPONSIVE TAB OVERFLOW
+// ============================================================
+// Diagram / Equipment List / I/O List always stay as their own tabs.
+// Overall Broadcast Inventory / Floorplan / Comms Plotting / Org Chart move
+// into a single "Extras ▾" dropdown whenever the topbar is too narrow to fit
+// everything on one line — which browser zoom triggers just like a narrow
+// window does, since both shrink the effective CSS-pixel viewport width.
+// The same four <button> elements are relocated (not cloned) between the
+// inline row and the dropdown menu, so their ids, active-state classes, and
+// onclick handlers never need to be duplicated or kept in sync.
+function updateTabOverflow() {
+  const topbar = document.querySelector('.topbar');
+  const inline = document.getElementById('extra-tabs-inline');
+  const dropdown = document.getElementById('extras-dropdown');
+  const menu = document.getElementById('extras-dropdown-menu');
+  if (!topbar || !inline || !dropdown || !menu) return;
+
+  // Always reset to the canonical inline layout first (moving anything
+  // parked in the dropdown menu back), then measure fresh — this run may
+  // re-collapse them, but the "does it fit" check always starts from the
+  // same baseline instead of compounding whatever state a previous run left.
+  if (menu.children.length) [...menu.children].forEach(btn => inline.appendChild(btn));
+  inline.style.display = 'flex';
+  dropdown.style.display = 'none';
+  closeExtrasDropdown();
+
+  const fits = topbar.scrollWidth <= topbar.clientWidth + 1;
+  if (!fits) {
+    [...inline.children].forEach(btn => menu.appendChild(btn));
+    inline.style.display = 'none';
+    dropdown.style.display = '';
+  }
+}
+window.addEventListener('resize', updateTabOverflow);
+updateTabOverflow();
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -3855,103 +4017,98 @@ async function exportPDF(btn) {
   btn.disabled = false; btn.textContent = orig;
 }
 
+// Plain-text description of what's patched into/out of a diagram node's
+// port i ("From X (Y)" / "To X (Y)"), or '' if that port is unconnected.
+// Shared by exportIOCSV() and the per-device copy button so both stay in
+// sync with how a connection is described.
+function ioNodePortDesc(node, i, dir) {
+  if (dir === 'in') {
+    if (i >= node.ins) return '';
+    const inEdge = edges.find(e => e.to === node.id && e.toPortIdx === i);
+    if (!inEdge) return '';
+    const inNode = nodes.find(n => n.id === inEdge.from);
+    if (!inNode) return '';
+    const srcPl  = inNode.portLabels && inNode.portLabels.out;
+    const srcLbl = srcPl && srcPl[inEdge.fromPortIdx] !== undefined ? srcPl[inEdge.fromPortIdx] : (inNode.outs > 1 ? `OUT${inEdge.fromPortIdx+1}` : 'OUT');
+    return `From ${inNode.name} (${srcLbl})` + (inEdge.label ? ` · ${inEdge.label}` : '');
+  } else {
+    if (i >= node.outs) return '';
+    const outEdge = edges.find(e => e.from === node.id && e.fromPortIdx === i);
+    if (!outEdge) return '';
+    const outNode = nodes.find(n => n.id === outEdge.to);
+    if (!outNode) return '';
+    const dstPl  = outNode.portLabels && outNode.portLabels.in;
+    const dstLbl = dstPl && dstPl[outEdge.toPortIdx] !== undefined ? dstPl[outEdge.toPortIdx] : (outNode.ins > 1 ? `IN${outEdge.toPortIdx+1}` : 'IN');
+    return `To ${outNode.name} (${dstLbl})` + (outEdge.label ? ` · ${outEdge.label}` : '');
+  }
+}
+
+// Builds one device's I/O block as an array of 5-cell rows:
+//   ['', name, '', '', '']
+//   ['', sublabel, '', '', '']            (only when sublabel is given)
+//   ['', 'INPUT', '', 'OUTPUT', '']
+//   [inputNum, inputDesc, '', outputDesc, outputNum]   × maxRows
+// i.e. the row number sits on the outer edge of each side — left of Input,
+// right of Output — the same way a device's ports are numbered on the
+// canvas, rather than one shared numbering column down the middle.
+function buildIODeviceRows(name, sublabel, maxRows, inFn, outFn) {
+  const rows = [['', name, '', '', '']];
+  if (sublabel) rows.push(['', sublabel, '', '', '']);
+  rows.push(['', 'INPUT', '', 'OUTPUT', '']);
+  for (let i = 0; i < maxRows; i++) {
+    rows.push([String(i+1), inFn(i) || '', '', outFn(i) || '', String(i+1)]);
+  }
+  return rows;
+}
+
+// Resolves one I/O card back to its {name, sublabel, maxRows, inFn, outFn}
+// — used by both exportIOCSV() (every device at once) and copyIODevice()
+// (one device on demand), so a card's on-screen data and its exported/
+// copied text can never drift apart.
+function ioDeviceSpec(kind, key) {
+  if (kind === 'node') {
+    const node = nodes.find(n => n.id === key); if (!node) return null;
+    return {
+      name: node.name,
+      sublabel: node.sublabel || '',
+      maxRows: Math.max(node.ins || 0, node.outs || 0, 1),
+      inFn:  i => ioNodePortDesc(node, i, 'in'),
+      outFn: i => ioNodePortDesc(node, i, 'out'),
+    };
+  } else {
+    const tbl = ioTables.find(t => t.id === key); if (!tbl) return null;
+    return {
+      name: tbl.name,
+      sublabel: '',
+      maxRows: Math.max(tbl.ins || 0, tbl.outs || 0, 1),
+      inFn:  i => (tbl.rows[i] && tbl.rows[i].input)  || '',
+      outFn: i => (tbl.rows[i] && tbl.rows[i].output) || '',
+    };
+  }
+}
+
 function exportIOCSV() {
   const q = s => `"${(String(s||'')).replace(/"/g,'""')}"`;
-  const DEVS_PER_ROW = 3;
-
-  // Build device data from diagram nodes
-  const devData = nodes.map(node => {
-    const maxRows = Math.max(node.ins || 0, node.outs || 0, 1);
-    const pl  = node.portLabels    || {in:{}, out:{}};
-    const psl = node.portSubLabels || {in:{}, out:{}};
-    const getInLbl  = i => (pl.in  && pl.in[i]  !== undefined ? pl.in[i]  : (node.ins  > 1 ? `IN${i+1}`  : 'IN'))  + (psl.in  && psl.in[i]  ? ` — ${psl.in[i]}`  : '');
-    const getOutLbl = i => (pl.out && pl.out[i] !== undefined ? pl.out[i] : (node.outs > 1 ? `OUT${i+1}` : 'OUT')) + (psl.out && psl.out[i] ? ` — ${psl.out[i]}` : '');
-
-    const rows = [];
-    for (let i = 0; i < maxRows; i++) {
-      const portLbl = i < node.ins ? getInLbl(i) : getOutLbl(i);
-
-      let inputVal = '';
-      if (i < node.ins) {
-        const inEdge = edges.find(e => e.to === node.id && e.toPortIdx === i);
-        if (inEdge) {
-          const inNode = nodes.find(n => n.id === inEdge.from);
-          if (inNode) {
-            const srcPl  = inNode.portLabels && inNode.portLabels.out;
-            const srcLbl = srcPl && srcPl[inEdge.fromPortIdx] !== undefined ? srcPl[inEdge.fromPortIdx] : (inNode.outs > 1 ? `OUT${inEdge.fromPortIdx+1}` : 'OUT');
-            inputVal = `From ${inNode.name} (${srcLbl})` + (inEdge.label ? ` · ${inEdge.label}` : '');
-          }
-        }
-      }
-
-      let outputVal = '';
-      if (i < node.outs) {
-        const outEdge = edges.find(e => e.from === node.id && e.fromPortIdx === i);
-        if (outEdge) {
-          const outNode = nodes.find(n => n.id === outEdge.to);
-          if (outNode) {
-            const dstPl  = outNode.portLabels && outNode.portLabels.in;
-            const dstLbl = dstPl && dstPl[outEdge.toPortIdx] !== undefined ? dstPl[outEdge.toPortIdx] : (outNode.ins > 1 ? `IN${outEdge.toPortIdx+1}` : 'IN');
-            outputVal = `To ${outNode.name} (${dstLbl})` + (outEdge.label ? ` · ${outEdge.label}` : '');
-          }
-        }
-      }
-
-      rows.push({ portLbl, inputVal, outputVal });
-    }
-    return { name: node.name, sublabel: node.sublabel || '', rows };
-  });
-
+  const DEVS_PER_ROW = 2; // 5 columns/device — 2 fits comfortably side by side
   let csv = '';
 
-  function writeGroup(group) {
-    // Pad to DEVS_PER_ROW with nulls
-    while (group.length < DEVS_PER_ROW) group.push(null);
-
-    // Name row: [empty, name, empty] per device
-    csv += group.flatMap(d => ['', d ? d.name : '', '']).map(q).join(',') + '\n';
-
-    // Sublabel row (only if any device has one)
-    if (group.some(d => d && d.sublabel)) {
-      csv += group.flatMap(d => ['', d && d.sublabel ? d.sublabel : '', '']).map(q).join(',') + '\n';
+  function writeGroup(specs) {
+    while (specs.length < DEVS_PER_ROW) specs.push(null);
+    const rowsOf = specs.map(s => s ? buildIODeviceRows(s.name, s.sublabel, s.maxRows, s.inFn, s.outFn) : []);
+    const maxLines = Math.max(...rowsOf.map(r => r.length), 0);
+    for (let li = 0; li < maxLines; li++) {
+      csv += rowsOf.flatMap(r => r[li] || ['', '', '', '', '']).map(q).join(',') + '\n';
     }
-
-    // Column header row: [empty, INPUT, OUTPUT] per device
-    csv += group.flatMap(d => [d ? '' : '', d ? 'INPUT' : '', d ? 'OUTPUT' : '']).map(q).join(',') + '\n';
-
-    // Data rows
-    const maxR = Math.max(...group.filter(Boolean).map(d => d.rows ? d.rows.length : 0), 0);
-    for (let ri = 0; ri < maxR; ri++) {
-      csv += group.flatMap(d => {
-        if (!d || !d.rows || !d.rows[ri]) return ['', '', ''];
-        const r = d.rows[ri];
-        return [r.portLbl, r.inputVal, r.outputVal];
-      }).map(q).join(',') + '\n';
-    }
-
     csv += '\n';
   }
 
-  // Diagram nodes
-  if (devData.length) {
-    for (let gi = 0; gi < devData.length; gi += DEVS_PER_ROW)
-      writeGroup(devData.slice(gi, gi + DEVS_PER_ROW));
-  }
+  const nodeSpecs = nodes.map(n => ioDeviceSpec('node', n.id));
+  for (let gi = 0; gi < nodeSpecs.length; gi += DEVS_PER_ROW)
+    writeGroup(nodeSpecs.slice(gi, gi + DEVS_PER_ROW));
 
-  // Manual I/O tables
-  if (ioTables.length) {
-    const manualDev = ioTables.map(tbl => {
-      const maxR = Math.max(tbl.ins || 0, tbl.outs || 0, 1);
-      const rows = [];
-      for (let i = 0; i < maxR; i++) {
-        const row = tbl.rows[i] || {};
-        rows.push({ portLbl: String(i + 1), inputVal: row.input || '', outputVal: row.output || '' });
-      }
-      return { name: tbl.name, sublabel: '', rows };
-    });
-    for (let gi = 0; gi < manualDev.length; gi += DEVS_PER_ROW)
-      writeGroup(manualDev.slice(gi, gi + DEVS_PER_ROW));
-  }
+  const tblSpecs = ioTables.map(t => ioDeviceSpec('manual', t.id));
+  for (let gi = 0; gi < tblSpecs.length; gi += DEVS_PER_ROW)
+    writeGroup(tblSpecs.slice(gi, gi + DEVS_PER_ROW));
 
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
@@ -3960,14 +4117,22 @@ function exportIOCSV() {
   a.click();
 }
 
-function exportCSV() {
-  // Strip emojis and extra whitespace
+// Copies just one device's I/O block (same layout as exportIOCSV, but
+// tab-separated) — the per-card "📋 Copy" button.
+async function copyIODevice(kind, key, btn) {
+  const spec = ioDeviceSpec(kind, key);
+  if (!spec) return;
   const stripEmoji = s => (s||'').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').replace(/\s+/g,' ').trim();
-  const q = s => `"${stripEmoji(s).replace(/"/g,'""')}"`;
-  const row = (...cells) => cells.map(c => q(String(c==null?'':c))).join(',') + '\n';
-  const blank = () => '\n';
-  const hdr = label => `${label}\n`;
+  const clean = s => stripEmoji(String(s==null?'':s)).replace(/[\t\r\n]+/g, ' ').trim();
+  const rows = buildIODeviceRows(spec.name, spec.sublabel, spec.maxRows, spec.inFn, spec.outFn);
+  const text = rows.map(r => r.map(clean).join('\t')).join('\n') + '\n';
+  await copyTextToClipboard(text, btn);
+}
 
+// Builds the full Equipment List report as text, using whatever row/blank/hdr
+// formatting the caller supplies — shared by exportCSV() (comma-quoted) and
+// copyEquipList() (tab-separated, for pasting straight into spreadsheet cells).
+function buildEquipListText(row, blank, hdr) {
   // Build name→category lookup
   const nameToCat = {};
   document.querySelectorAll('.sidebar-section .sec-body').forEach(sec => {
@@ -4103,8 +4268,75 @@ function exportCSV() {
     }
   }
 
+  return csv;
+}
+
+function exportCSV() {
+  // Strip emojis and extra whitespace
+  const stripEmoji = s => (s||'').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').replace(/\s+/g,' ').trim();
+  const q = s => `"${stripEmoji(s).replace(/"/g,'""')}"`;
+  const row = (...cells) => cells.map(c => q(String(c==null?'':c))).join(',') + '\n';
+  const blank = () => '\n';
+  const hdr = label => `${label}\n`;
+  const csv = buildEquipListText(row, blank, hdr);
   const blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8'});
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'broadcast-equipment.csv'; a.click();
+}
+
+// Copies the same report as exportCSV() produces, but tab-separated instead
+// of comma-quoted — plain TSV text is what Sheets/Excel/Numbers expect on
+// the clipboard to split a paste into distinct cells (one column per tab,
+// one row per newline), the same way copying a real spreadsheet range does.
+// Shared clipboard-copy helper — writes `text`, flashes a checkmark/✗ on
+// `btn` (if given), and falls back to the legacy execCommand path for
+// contexts where the async Clipboard API is unavailable (e.g. non-secure
+// origins).
+async function copyTextToClipboard(text, btn) {
+  const flash = ok => {
+    if (!btn) return;
+    const orig = btn.dataset.origLabel || btn.textContent;
+    btn.dataset.origLabel = orig;
+    btn.textContent = ok ? '✓ Copied' : '✗ Copy failed';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  };
+
+  try {
+    await navigator.clipboard.writeText(text);
+    flash(true);
+    return true;
+  } catch (e) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      flash(ok);
+      if (!ok) throw new Error('execCommand copy failed');
+      return true;
+    } catch (e2) {
+      console.error(e2);
+      flash(false);
+      alert('Could not copy to clipboard: ' + e2.message);
+      return false;
+    }
+  }
+}
+
+async function copyEquipList(btn) {
+  const stripEmoji = s => (s||'').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').replace(/\s+/g,' ').trim();
+  // Tabs/newlines inside a cell would be misread as new columns/rows by the
+  // paste target, so collapse them rather than quoting (TSV has no quoting
+  // convention spreadsheet apps agree on for pasted plain text).
+  const clean = s => stripEmoji(String(s==null?'':s)).replace(/[\t\r\n]+/g, ' ').trim();
+  const row = (...cells) => cells.map(clean).join('\t') + '\n';
+  const blank = () => '\n';
+  const hdr = label => `${label}\n`;
+  const text = buildEquipListText(row, blank, hdr);
+  await copyTextToClipboard(text, btn);
 }
 
 function escHtml(s) {
@@ -4548,9 +4780,11 @@ function buildIOCard(titleHtml, rows, inputFn, outputFn, isManual, tblId, inLblF
     }
   }
   const delBtn = isManual ? `<button onclick="deleteIOTable(${tblId})" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:16px;padding:0 4px;line-height:1" title="Delete table">×</button>` : '';
+  const copyKeyLiteral = isManual ? String(tblId) : `'${tblId}'`;
+  const copyBtn = `<button onclick="copyIODevice('${isManual?'manual':'node'}', ${copyKeyLiteral}, this)" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:13px;padding:0 4px;line-height:1" title="Copy this device's I/O list">📋</button>`;
   const hdrContent = isManual
-    ? `<span id="io-hdr-${tblId}" contenteditable="true" style="outline:none;cursor:text">${titleHtml}</span>${delBtn}`
-    : `${titleHtml}`;
+    ? `<span id="io-hdr-${tblId}" contenteditable="true" style="outline:none;cursor:text">${titleHtml}</span>${copyBtn}${delBtn}`
+    : `${titleHtml}${copyBtn}`;
   return `<div class="io-card">
     <div class="io-card-header${isManual?' manual':''}" style="display:flex;align-items:center;justify-content:center;gap:8px">${hdrContent}</div>
     <div class="io-col-hdr">
@@ -4606,7 +4840,7 @@ function renderIOList() {
         const dstPl = outNode && outNode.portLabels && outNode.portLabels.in;
         const dstLbl = dstPl && dstPl[outEdge.toPortIdx] !== undefined ? dstPl[outEdge.toPortIdx] : (outNode && outNode.ins > 1 ? `IN${outEdge.toPortIdx+1}` : 'IN');
         return `to <b>${outNode ? escHtml(outNode.name) : '?'}</b> <span style="color:var(--text-muted)">(${escHtml(dstLbl)})</span>` + (outEdge.label ? ` <span style="color:var(--text-muted);font-size:10px">· ${escHtml(outEdge.label)}</span>` : '');
-      }, false, null, inLblFn, outLblFn);
+      }, false, node.id, inLblFn, outLblFn);
     });
     html += `</div>`;
   }
