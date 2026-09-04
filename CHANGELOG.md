@@ -11,8 +11,13 @@
 - **Per-device "📋 Copy"** button on every I/O List card — copies just that device's I/O block.
 - **Floating Undo/Redo panel** pinned to the top-left of the canvas, collapsible via a small handle (remembers collapsed/expanded state).
 - **"Extras ▾" dropdown** — Overall Broadcast Inventory, Floorplan, Comms Plotting, and Org Chart collapse into one dropdown whenever the topbar doesn't have room for every tab (e.g. browser zoomed in). Diagram, Equipment List, and I/O List always stay visible.
+- **🎯 Center view** button on the floating canvas panel — recenters your viewport on the diagram's actual content, so a scroll/pan that drifts off into empty canvas space no longer looks like lost work.
+- **"Collapse All"** button in the equipment sidebar (next to Search) — collapses every category at once, and flips to "Expand All" once everything's collapsed.
+- **Vendor / third-party marking** for devices and cables — a "🏷️ Vendor" checkbox in Edit Device / Edit Cable flags an item as not ours. Vendor items are excluded from the Equipment List's counts and its CSV/Copy exports, and get a visual cue on the canvas: a dashed border + corner badge for nodes, a dashed line + label prefix for cables.
 
 ### Changed
+- Paste (Ctrl+V) now drops the copy centered on your current cursor position on the canvas, instead of always offsetting from the original node's spot.
+- Edit Device's Inputs/Outputs fields now cap at 40 (previously 32).
 - I/O List's save/export/copy format changed to number-on-each-outer-edge layout (`[in #][input][blank][output][out #]`) with INPUT/OUTPUT headers, matching each device's on-canvas port layout.
 - Topbar reorganized: Labels/Curved/Flow/Theme consolidated into one "⚙ Settings" dropdown; Import/Export/Clear consolidated into one "📁 File" dropdown, placed ahead of the Diagram tab. "Clear" renamed to "Clear All" (kept its existing confirmation prompt).
 - I/O List tab moved next to Equipment List.

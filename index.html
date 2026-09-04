@@ -197,6 +197,10 @@
 
   .node { position: absolute; min-width: 80px; border-radius: 9px; border: 2px solid; user-select: none; box-shadow: 0 3px 16px rgba(0,0,0,0.55); will-change: left, top; display: flex; flex-direction: column; box-sizing: border-box; overflow: visible; cursor: default; }
   .node-body { flex: 1; overflow: hidden; border-radius: 7px; display: flex; flex-direction: column; min-height: 0; box-sizing: border-box; }
+  /* Vendor / third-party devices & cables get a dashed border + a corner
+     badge so they read as "not ours" at a glance on the canvas. */
+  .node.vendor { border-style: dashed; }
+  .node-vendor-badge { position: absolute; top: -9px; right: -8px; background: #f39c12; color: #1a1200; font-size: 8px; font-weight: 800; letter-spacing: 0.3px; padding: 2px 6px; border-radius: 9px; box-shadow: 0 2px 6px rgba(0,0,0,0.45); white-space: nowrap; z-index: 5; pointer-events: none; }
   .node.hw   { background: var(--node-hw);   border-color: var(--node-hw-b); }
   .node.conv { background: var(--node-conv); border-color: var(--node-conv-b); }
   /* Equipment-group color coding — overrides the plain hw/conv coloring above */
@@ -578,6 +582,7 @@
           <span class="sidebar-search-ico">🔍</span>
           <input type="text" id="equip-search" placeholder="Search equipment…" oninput="filterEquip(this.value)" autocomplete="off">
         </div>
+        <button class="add-equip-btn" id="collapse-all-btn" onclick="toggleCollapseAllSec()" title="Collapse all categories" style="font-size:13px">▲</button>
         <button class="add-equip-btn" onclick="toggleAddEquip()" title="Add custom equipment">+</button>
         <button class="del-equip-btn" id="del-equip-btn" onclick="toggleRemoveMode()" title="Remove sidebar item">×</button>
         <button class="add-equip-btn" onclick="saveCustomItems()" title="Save custom items" style="color:var(--success);font-size:13px">💾</button>
@@ -722,6 +727,8 @@
         <button class="btn-icon undo-float-item" id="btn-undo" onclick="undo()" title="Undo (Ctrl+Z)" disabled>↩</button>
         <button class="btn-icon undo-float-item" id="btn-redo" onclick="redo()" title="Redo (Ctrl+Y)" disabled>↪</button>
         <div class="topbar-sep undo-float-item"></div>
+        <button class="btn-icon undo-float-item" onclick="centerViewOnContent()" title="Center view on your diagram">🎯</button>
+        <div class="topbar-sep undo-float-item"></div>
         <button class="btn-icon" id="undo-float-collapse-btn" onclick="toggleUndoFloatPanel()" title="Hide undo/redo controls">‹</button>
       </div>
     </div>
@@ -846,6 +853,12 @@
         <input class="fi" type="text" id="cable-lbl" placeholder="e.g. PGM OUT">
       </div>
     </div>
+    <div class="fg">
+      <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12px;color:var(--text);font-weight:400">
+        <input type="checkbox" id="cable-vendor" style="width:15px;height:15px;cursor:pointer;accent-color:var(--accent2)">
+        🏷️ Vendor / third-party cable <span style="color:var(--text-muted)">(not ours — excluded from the equipment list)</span>
+      </label>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeCableModal()">Cancel</button>
       <button class="btn btn-primary" onclick="confirmCable()">Save</button>
@@ -873,12 +886,18 @@
         <input class="fi" type="text" id="dev-pc-label" placeholder="e.g. Replay, Graphics…" style="flex:1">
       </div>
     </div>
+    <div class="fg">
+      <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12px;color:var(--text);font-weight:400">
+        <input type="checkbox" id="dev-vendor" style="width:15px;height:15px;cursor:pointer;accent-color:var(--accent2)">
+        🏷️ Vendor / third-party device <span style="color:var(--text-muted)">(not ours — excluded from the equipment list)</span>
+      </label>
+    </div>
     <div class="frow">
       <div class="fg">
         <label class="fl">Inputs</label>
         <div class="num-stepper">
           <button onclick="stepPorts('in',-1)">−</button>
-          <input class="nv" type="number" id="dev-ins" value="1" min="0" max="32">
+          <input class="nv" type="number" id="dev-ins" value="1" min="0" max="40">
           <button onclick="stepPorts('in',1)">+</button>
         </div>
       </div>
@@ -886,7 +905,7 @@
         <label class="fl">Outputs</label>
         <div class="num-stepper">
           <button onclick="stepPorts('out',-1)">−</button>
-          <input class="nv" type="number" id="dev-outs" value="1" min="0" max="32">
+          <input class="nv" type="number" id="dev-outs" value="1" min="0" max="40">
           <button onclick="stepPorts('out',1)">+</button>
         </div>
       </div>
@@ -1379,6 +1398,17 @@ applyTheme();
 
 const CW = document.getElementById('canvas-wrap');
 
+// Content-space (unscaled by zoom) cursor position while hovering the
+// canvas — tracked passively so Ctrl+V can paste at "wherever the cursor
+// currently is" instead of always offsetting from the copied node's spot.
+let lastCanvasX = null, lastCanvasY = null;
+CW.addEventListener('mousemove', e => {
+  const r = CW.getBoundingClientRect();
+  lastCanvasX = (e.clientX - r.left + CW.scrollLeft) / zoom;
+  lastCanvasY = (e.clientY - r.top  + CW.scrollTop)  / zoom;
+});
+CW.addEventListener('mouseleave', () => { lastCanvasX = null; lastCanvasY = null; });
+
 const CABLE_CLR = {
   'SDI':'#c0392b','HDMI':'#8e44ad','XLR-XLR':'#27ae60','XLR-PL':'#2ecc71',
   'PL-PL':'#16a085','USB':'#3498db','CAT7':'#f39c12','DP':'#e67e22','Printer Cable':'#95a5a6','Audio Jack':'#d4a017'
@@ -1633,6 +1663,22 @@ function toggleSec(hdr) {
   hdr.nextElementSibling.classList.toggle('closed');
 }
 
+// Single button that collapses every category at once — and, once
+// everything's already collapsed, flips to expanding them all back.
+function toggleCollapseAllSec() {
+  const headers = document.querySelectorAll('.sidebar-section .sec-hdr');
+  const allClosed = [...headers].every(h => h.classList.contains('closed'));
+  headers.forEach(hdr => {
+    hdr.classList.toggle('closed', !allClosed);
+    hdr.nextElementSibling.classList.toggle('closed', !allClosed);
+  });
+  const btn = document.getElementById('collapse-all-btn');
+  if (btn) {
+    btn.textContent = allClosed ? '▲' : '▼';
+    btn.title = allClosed ? 'Collapse all categories' : 'Expand all categories';
+  }
+}
+
 // ============================================================
 // TABS
 // ============================================================
@@ -1769,7 +1815,7 @@ function renderNode(node) {
   // colored before their (custom) equipment item existed in the sidebar yet.
   if (node.type !== 'group') node.cat = getEquipCategory(node.name);
   const el = document.createElement('div');
-  el.className = `node ${node.type}` + (node.cat ? ` cat-${node.cat}` : '');
+  el.className = `node ${node.type}` + (node.cat ? ` cat-${node.cat}` : '') + (node.isVendor ? ' vendor' : '');
   el.id = 'node-' + node.id;
   placeNode(el, node);
   el.innerHTML = buildNodeHTML(node);
@@ -1850,6 +1896,7 @@ function buildNodeHTML(node) {
     </div>` : '';
 
   return `
+    ${node.isVendor ? '<div class="node-vendor-badge" title="Vendor / third-party device — not ours, excluded from the equipment list">🏷️ VENDOR</div>' : ''}
     <div class="node-body">
       <div class="node-header" id="nh-${node.id}">
         <span class="node-icon">${node.icon}</span>
@@ -2155,11 +2202,13 @@ function openCableModal(fromId, toId, fromIdx, toIdx, existingEdgeId, fromDir) {
       document.getElementById('cable-type').value = ed.cable;
       document.getElementById('cable-dist').value = ed.distance;
       document.getElementById('cable-lbl').value  = ed.label||'';
+      document.getElementById('cable-vendor').checked = !!ed.isVendor;
     }
   } else {
     document.getElementById('cable-type').value = 'SDI';
     document.getElementById('cable-dist').value = '3';
     document.getElementById('cable-lbl').value  = '';
+    document.getElementById('cable-vendor').checked = false;
   }
   updateCableChip();
   document.getElementById('cable-modal').style.display = 'flex';
@@ -2187,18 +2236,20 @@ function confirmCable() {
   const cable    = document.getElementById('cable-type').value;
   const distance = parseFloat(document.getElementById('cable-dist').value)||1;
   const label    = document.getElementById('cable-lbl').value.trim();
+  const isVendor = document.getElementById('cable-vendor').checked;
   pushHistory();
   if (editEdgeId) {
     const ed = edges.find(e=>e.id===editEdgeId);
-    if (ed) { ed.cable=cable; ed.distance=distance; ed.label=label; refreshEdges(); }
+    if (ed) { ed.cable=cable; ed.distance=distance; ed.label=label; ed.isVendor=isVendor; refreshEdges(); }
   } else {
     const ed = {id:'e'+(eid++), from:pendConn.from, fromPortIdx:pendConn.fromIdx, fromDir:pendConn.fromDir||'out',
-                to:pendConn.to, toPortIdx:pendConn.toIdx, cable, distance, label};
+                to:pendConn.to, toPortIdx:pendConn.toIdx, cable, distance, label, isVendor};
     edges.push(ed);
     renderEdge(ed);
   }
   closeCableModal();
   updateAllPCPortStates();
+  if (document.getElementById('tab-e').classList.contains('active')) renderEquipList();
 }
 
 // ============================================================
@@ -2210,6 +2261,7 @@ function openDevModal(nodeId) {
   document.getElementById('dev-ins').value      = node.ins;
   document.getElementById('dev-outs').value     = node.outs;
   document.getElementById('dev-op-name').value  = node.operatorName||'';
+  document.getElementById('dev-vendor').checked = !!node.isVendor;
   // Photo preview
   const prev = document.getElementById('dev-op-preview');
   const ph   = document.getElementById('dev-op-placeholder');
@@ -2273,7 +2325,7 @@ function stepPeri(key, delta) {
 
 function stepPorts(dir, delta) {
   const el = document.getElementById(dir==='in'?'dev-ins':'dev-outs');
-  el.value = Math.max(0, Math.min(32, (parseInt(el.value)||0)+delta));
+  el.value = Math.max(0, Math.min(40, (parseInt(el.value)||0)+delta));
 }
 
 function closeDevModal() { editNodeId=null; document.getElementById('dev-modal').style.display='none'; }
@@ -2291,6 +2343,8 @@ function confirmDev() {
   node.ins          = Math.max(0, parseInt(document.getElementById('dev-ins').value)||0);
   node.outs         = Math.max(0, parseInt(document.getElementById('dev-outs').value)||0);
   node.operatorName = document.getElementById('dev-op-name').value.trim();
+  node.isVendor     = document.getElementById('dev-vendor').checked;
+  document.getElementById('node-'+editNodeId)?.classList.toggle('vendor', node.isVendor);
   const prev = document.getElementById('dev-op-preview');
   if (prev.src && prev.style.display !== 'none') node.operatorPhoto = prev.src;
   else if (prev.style.display === 'none') node.operatorPhoto = '';
@@ -2751,7 +2805,7 @@ function updateEdgeEl(ed) {
       + finalSegs.map(s=>`C${s.p1.x} ${s.p1.y},${s.p2.x} ${s.p2.y},${s.p3.x} ${s.p3.y}`).join(' ');
 
   const path = document.getElementById('ep-'+ed.id);
-  if (path) { path.setAttribute('d',d); path.setAttribute('stroke',clr); }
+  if (path) { path.setAttribute('d',d); path.setAttribute('stroke',clr); path.setAttribute('stroke-dasharray', ed.isVendor ? '7 5' : ''); }
   const hit = document.getElementById('eph-'+ed.id);
   if (hit) hit.setAttribute('d',d);
 
@@ -2777,7 +2831,7 @@ function updateEdgeEl(ed) {
     // Only rebuild HTML when not currently being edited
     const isEditing = [...le.querySelectorAll('.el-dist,.el-custom')].some(s => s.contentEditable === 'true');
     if (!isEditing) {
-      le.innerHTML = `<span class="el-info">${escHtml(ed.cable)} ·</span>`
+      le.innerHTML = `<span class="el-info">${ed.isVendor ? '🏷️ ' : ''}${escHtml(ed.cable)} ·</span>`
         + `<span class="el-dist" data-ph="m" data-eid="${ed.id}">${ed.distance}</span><span class="el-unit">m</span>`
         + `<span class="el-sep"> · </span>`
         + `<span class="el-custom" data-ph="label" data-eid="${ed.id}">${escHtml(ed.label||'')}</span>`;
@@ -3200,7 +3254,16 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey||e.metaKey) && e.key==='v') {
     if (clipboard) {
       e.preventDefault();
-      const cx = clipboard.x + 30, cy = clipboard.y + 30;
+      // Paste centered at the cursor's current spot on the canvas, if it's
+      // hovering there; otherwise fall back to the old nudge-from-original.
+      let cx, cy;
+      if (lastCanvasX != null && lastCanvasY != null) {
+        const w = clipboard.w || 160, h = clipboard.h || 70;
+        cx = lastCanvasX - w / 2;
+        cy = lastCanvasY - h / 2;
+      } else {
+        cx = clipboard.x + 30; cy = clipboard.y + 30;
+      }
       const n = makeNode(clipboard.type, clipboard.name, clipboard.icon, cx, cy,
         clipboard.ins, clipboard.outs, clipboard.sublabel||'',
         clipboard.operatorName||'', clipboard.operatorPhoto||'');
@@ -3305,6 +3368,26 @@ function hideCtx() { document.getElementById('ctx').style.display='none'; }
 // ============================================================
 function adjZoom(d) { zoom=Math.max(0.25,Math.min(2.5,Math.round((zoom+d)*100)/100)); applyZoom(); }
 function setZoom(v) { zoom=Math.max(0.25,Math.min(2.5,v)); applyZoom(); }
+
+// Scrolls the canvas so the diagram's bounding box is centered in the
+// current viewport, at the current zoom level — a "where did my stuff go"
+// recovery button for when you've scrolled/panned far away from your nodes.
+function centerViewOnContent() {
+  if (!nodes.length) { CW.scrollLeft = 0; CW.scrollTop = 0; return; }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  nodes.forEach(n => {
+    const el = document.getElementById('node-' + n.id);
+    const w = el ? el.offsetWidth  : (n.w || 160);
+    const h = el ? el.offsetHeight : (n.h || 60);
+    minX = Math.min(minX, n.x);
+    minY = Math.min(minY, n.y);
+    maxX = Math.max(maxX, n.x + w);
+    maxY = Math.max(maxY, n.y + h);
+  });
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  CW.scrollLeft = cx * zoom - CW.clientWidth  / 2;
+  CW.scrollTop  = cy * zoom - CW.clientHeight / 2;
+}
 
 // Same as adjZoom, but keeps the point under (clientX, clientY) fixed on
 // screen — used by wheel-zoom so the diagram zooms toward the cursor
@@ -3495,27 +3578,31 @@ function clearAll() {
 // ============================================================
 function renderEquipList() {
   const ct = document.getElementById('equip-content');
-  if (!nodes.length) {
+  // Vendor / third-party devices and cables are excluded from "our"
+  // equipment count (they still appear on the canvas and in the I/O List).
+  const eqNodes = nodes.filter(n => !n.isVendor);
+  const eqEdges = edges.filter(e => !e.isVendor);
+  if (!eqNodes.length) {
     ct.innerHTML=`<div class="empty-state"><div style="font-size:44px;opacity:0.25">📋</div><div>No equipment yet</div><div style="font-size:11px;opacity:0.6">Build your diagram first</div></div>`;
     return;
   }
-  const hw   = nodes.filter(n=>n.type==='hw');
-  const conv = nodes.filter(n=>n.type==='conv');
+  const hw   = eqNodes.filter(n=>n.type==='hw');
+  const conv = eqNodes.filter(n=>n.type==='conv');
 
   // Group cables: type → length → {qty, runs}
   const cableMap={};
-  edges.forEach(e=>{
+  eqEdges.forEach(e=>{
     if(!cableMap[e.cable]) cableMap[e.cable]={};
     if(!cableMap[e.cable][e.distance]) cableMap[e.cable][e.distance]={qty:0,runs:[]};
     cableMap[e.cable][e.distance].qty++;
-    const fn=nodes.find(n=>n.id===e.from), tn=nodes.find(n=>n.id===e.to);
+    const fn=eqNodes.find(n=>n.id===e.from), tn=eqNodes.find(n=>n.id===e.to);
     cableMap[e.cable][e.distance].runs.push({
       from:fn?fn.name:'?', to:tn?tn.name:'?', label:e.label||''
     });
   });
 
   let html=`<div class="eq-h1">Equipment List</div>
-    <div class="eq-sub">${nodes.length} device(s) · ${edges.length} cable run(s)</div>
+    <div class="eq-sub">${eqNodes.length} device(s) · ${eqEdges.length} cable run(s)</div>
     <div class="export-bar">
       <button class="btn btn-primary btn-sm" onclick="exportCSV()">⬇ Export CSV</button>
       <button class="btn btn-ghost btn-sm" onclick="copyEquipList(this)">📋 Copy List</button>
@@ -3552,9 +3639,9 @@ function renderEquipList() {
     {key:'headsets',   label:'Broadcast Headsets', icon:'🎧'},
   ];
 
-  // Group all nodes by category (use base name before " — " for lookup)
+  // Group all eqNodes by category (use base name before " — " for lookup)
   const catGroups = {};
-  nodes.forEach(n => {
+  eqNodes.forEach(n => {
     const baseName = n.pcPeripherals != null ? 'PC' : parseNodeName(n.name).base;
     const cat = n.pcPeripherals != null ? 'general' : (nameToCat[baseName] || 'general');
     if (!catGroups[cat]) catGroups[cat] = [];
@@ -3647,7 +3734,7 @@ function renderEquipList() {
 
   // PC Peripherals — separate section, aggregated totals per type (UPS excluded, goes to Hardware UPS)
   const PC_PERI_DISPLAY = PERI_DEFS.filter(d => d.key !== 'ups');
-  const pcNodes = nodes.filter(n => n.pcPeripherals != null);
+  const pcNodes = eqNodes.filter(n => n.pcPeripherals != null);
   if (pcNodes.length) {
     let periRows = '', periTotal = 0;
     let ppti = 0;
@@ -3688,8 +3775,8 @@ function renderEquipList() {
     }
   }
 
-  // Hardware UPS — hw/conv nodes + PC nodes (pcPeripherals.ups)
-  const hwUpsNodes = nodes.filter(n => n.pcPeripherals == null && n.devUps > 0);
+  // Hardware UPS — hw/conv eqNodes + PC eqNodes (pcPeripherals.ups)
+  const hwUpsNodes = eqNodes.filter(n => n.pcPeripherals == null && n.devUps > 0);
   const pcUpsNodes = pcNodes.filter(n => (n.pcPeripherals||{}).ups > 0);
   if (hwUpsNodes.length || pcUpsNodes.length) {
     let totalHwUps = 0, hwUpsRows = '';
@@ -4133,6 +4220,10 @@ async function copyIODevice(kind, key, btn) {
 // formatting the caller supplies — shared by exportCSV() (comma-quoted) and
 // copyEquipList() (tab-separated, for pasting straight into spreadsheet cells).
 function buildEquipListText(row, blank, hdr) {
+  // Vendor / third-party devices and cables are excluded from "our"
+  // equipment count, matching renderEquipList().
+  const eqNodes = nodes.filter(n => !n.isVendor);
+  const eqEdges = edges.filter(e => !e.isVendor);
   // Build name→category lookup
   const nameToCat = {};
   document.querySelectorAll('.sidebar-section .sec-body').forEach(sec => {
@@ -4150,7 +4241,7 @@ function buildEquipListText(row, blank, hdr) {
 
   // Devices grouped by category (use base name for lookup)
   const sumCatGroups = {};
-  nodes.forEach(n => {
+  eqNodes.forEach(n => {
     const base = n.pcPeripherals != null ? 'PC' : parseNodeName(n.name).base;
     const cat  = n.pcPeripherals != null ? 'general' : (nameToCat[base] || 'general');
     if (!sumCatGroups[cat]) sumCatGroups[cat] = {};
@@ -4162,7 +4253,7 @@ function buildEquipListText(row, blank, hdr) {
   });
 
   // PC Peripherals totals (UPS separate)
-  const sumPcNodes = nodes.filter(n => n.pcPeripherals != null);
+  const sumPcNodes = eqNodes.filter(n => n.pcPeripherals != null);
   const sumPeriLabels = {monitor:'Monitor',powerCable:'Power Cable',hdmi:'HDMI Cable',dp:'DisplayPort Cable',keyboard:'Keyboard',mouse:'Mouse'};
   Object.entries(sumPeriLabels).forEach(([key, label]) => {
     const total = sumPcNodes.reduce((s,n) => s + (typeof (n.pcPeripherals||{})[key]==='number' ? (n.pcPeripherals||{})[key] : 0), 0);
@@ -4170,13 +4261,13 @@ function buildEquipListText(row, blank, hdr) {
   });
 
   // UPS totals (hw + PC)
-  const sumHwUps = nodes.filter(n=>n.pcPeripherals==null && n.devUps>0).reduce((s,n)=>s+n.devUps,0);
+  const sumHwUps = eqNodes.filter(n=>n.pcPeripherals==null && n.devUps>0).reduce((s,n)=>s+n.devUps,0);
   const sumPcUps = sumPcNodes.reduce((s,n)=>s+((n.pcPeripherals||{}).ups||0),0);
   if (sumHwUps + sumPcUps > 0) csv += row('Hardware UPS', 'UPS Unit', sumHwUps + sumPcUps);
 
   // Cable totals
   const sumCableQty = {};
-  edges.forEach(e => { sumCableQty[e.cable] = (sumCableQty[e.cable]||0) + 1; });
+  eqEdges.forEach(e => { sumCableQty[e.cable] = (sumCableQty[e.cable]||0) + 1; });
   Object.entries(sumCableQty).forEach(([cable, qty]) => csv += row('Cables', cable, qty));
 
   csv += blank();
@@ -4186,7 +4277,7 @@ function buildEquipListText(row, blank, hdr) {
   csv += hdr('EQUIPMENT BY CATEGORY');
   csv += row('Category','Device Name','Label / Sublabel','Operator','Qty');
   const catGroups = {};
-  nodes.forEach(n => {
+  eqNodes.forEach(n => {
     const base = n.pcPeripherals != null ? 'PC' : parseNodeName(n.name).base;
     const cat  = n.pcPeripherals != null ? 'general' : (nameToCat[base] || 'general');
     if (!catGroups[cat]) catGroups[cat] = [];
@@ -4220,7 +4311,7 @@ function buildEquipListText(row, blank, hdr) {
   csv += blank();
 
   // ── SECTION 2: PC Peripherals ──────────────────────────────────
-  const pcNodes = nodes.filter(n => n.pcPeripherals != null);
+  const pcNodes = eqNodes.filter(n => n.pcPeripherals != null);
   const PERI_LABELS = {monitor:'Monitor',powerCable:'Power Cable',hdmi:'HDMI Cable',dp:'DisplayPort Cable',keyboard:'Keyboard',mouse:'Mouse'};
   if (pcNodes.length) {
     csv += hdr('PC PERIPHERALS');
@@ -4236,7 +4327,7 @@ function buildEquipListText(row, blank, hdr) {
   }
 
   // ── SECTION 3: Hardware UPS ────────────────────────────────────
-  const hwUpsNodes = nodes.filter(n => n.pcPeripherals == null && n.devUps > 0);
+  const hwUpsNodes = eqNodes.filter(n => n.pcPeripherals == null && n.devUps > 0);
   const pcUpsNodes = pcNodes.filter(n => ((n.pcPeripherals||{}).ups||0) > 0);
   if (hwUpsNodes.length || pcUpsNodes.length) {
     csv += hdr('HARDWARE UPS');
@@ -4249,14 +4340,14 @@ function buildEquipListText(row, blank, hdr) {
   }
 
   // ── SECTION 4: Cables ──────────────────────────────────────────
-  if (edges.length) {
+  if (eqEdges.length) {
     csv += hdr('CABLES');
     csv += row('Cable Type','Length (m)','Qty','Total (m)','From','To','Label');
     const cmap = {};
-    edges.forEach(e => {
+    eqEdges.forEach(e => {
       const k = `${e.cable}|${e.distance}`;
       if (!cmap[k]) cmap[k] = {cable:e.cable, dist:e.distance, runs:[]};
-      const fn = nodes.find(n=>n.id===e.from), tn = nodes.find(n=>n.id===e.to);
+      const fn = eqNodes.find(n=>n.id===e.from), tn = eqNodes.find(n=>n.id===e.to);
       cmap[k].runs.push({from: fn?fn.name:'?', to: tn?tn.name:'?', label: e.label||''});
     });
     for (const v of Object.values(cmap)) {
