@@ -1257,17 +1257,28 @@ async function refreshProjectsList() {
   }
   listEl.innerHTML = projectsCache.map(p => `
     <div class="proj-row${p.id === currentProjectId ? ' active' : ''}">
-      <div class="proj-row-main" onclick="openProject('${p.id}', ${JSON.stringify(p.name || 'Untitled')})">
+      <div class="proj-row-main" data-action="open" data-id="${escHtml(p.id)}" data-name="${escHtml(p.name || 'Untitled')}">
         <div class="proj-row-name">${escHtml(p.name || 'Untitled')}</div>
         <div class="proj-row-meta">Updated ${escHtml(fmtProjTime(p.updatedAt))}</div>
       </div>
       <div class="proj-row-btns">
-        <button class="btn-icon" title="Rename" onclick="renameProject(event,'${p.id}', ${JSON.stringify(p.name || 'Untitled')})">✎</button>
-        <button class="btn-icon" title="Delete" onclick="deleteProject(event,'${p.id}', ${JSON.stringify(p.name || 'Untitled')})">🗑</button>
+        <button class="btn-icon" title="Rename" data-action="rename" data-id="${escHtml(p.id)}" data-name="${escHtml(p.name || 'Untitled')}">✎</button>
+        <button class="btn-icon" title="Delete" data-action="delete" data-id="${escHtml(p.id)}" data-name="${escHtml(p.name || 'Untitled')}">🗑</button>
       </div>
     </div>
   `).join('');
 }
+
+// Delegated click handler for the project list — avoids embedding project
+// names (which can contain quotes/colons/etc.) into inline onclick JS.
+document.getElementById('projects-list').addEventListener('click', ev => {
+  const el = ev.target.closest('[data-action]');
+  if (!el) return;
+  const {action, id, name} = el.dataset;
+  if (action === 'open') openProject(id, name);
+  else if (action === 'rename') renameProject(ev, id, name);
+  else if (action === 'delete') deleteProject(ev, id, name);
+});
 
 function openProjectsModal() {
   document.getElementById('projects-modal').style.display = 'flex';
@@ -4481,7 +4492,7 @@ let ioTid = 1;
 let ioRefreshTimer = null;
 
 function saveIOTables() {
-  localStorage.setItem('bfw-iotables', JSON.stringify({tables: ioTables, ioTid}));
+  try { localStorage.setItem('bfw-iotables', JSON.stringify({tables: ioTables, ioTid})); } catch(e) {}
   scheduleCloudSave();
 }
 function loadIOTables() {
