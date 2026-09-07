@@ -358,6 +358,13 @@
   .fp-sidebar { width: 220px; flex-shrink: 0; overflow-y: auto; background: var(--surface2); border-left: 1px solid var(--border); padding: 12px; }
   .fp-run-item { background: var(--surface3); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
   .fp-run-item.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .fp-textbox { position: absolute; box-sizing: border-box; background: rgba(0,0,0,0.55); border: 1px dashed rgba(255,255,255,0.4); border-radius: 4px; padding: 2px; cursor: move; pointer-events: auto; }
+  .fp-textbox:hover { border-color: rgba(255,255,255,0.8); }
+  .fp-textbox:hover .fp-tb-close, .fp-textbox:hover .fp-tb-resize { opacity: 1; }
+  .fp-tb-text { width: 100%; height: 100%; color: #fff; font-weight: 700; outline: none; overflow: hidden; word-break: break-word; cursor: text; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 1.15; }
+  .fp-tb-close { position: absolute; top: -8px; right: -8px; width: 16px; height: 16px; border-radius: 50%; background: var(--danger); border: none; color: #fff; font-size: 11px; cursor: pointer; opacity: 0; transition: opacity 0.15s; line-height: 1; padding: 0; }
+  .fp-tb-close:hover { opacity: 1 !important; }
+  .fp-tb-resize { position: absolute; right: -4px; bottom: -4px; width: 12px; height: 12px; cursor: se-resize; opacity: 0; transition: opacity 0.15s; background: var(--accent); border-radius: 2px; border: 1px solid #fff; }
   .fp-tabs { display: flex; align-items: center; gap: 4px; padding: 6px 14px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; flex-shrink: 0; }
   .fp-tab { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 6px; background: var(--surface2); border: 1px solid var(--border); cursor: pointer; font-size: 12px; color: var(--text-muted); }
   .fp-tab:hover { background: var(--surface3); color: var(--text); }
@@ -790,6 +797,8 @@
       <button class="btn btn-ghost btn-sm fp-mode-btn" id="fp-btn-draw" onclick="fpSetMode('draw')" title="Click to place waypoints. Double-click to finish.">✏️ Draw Run</button>
       <button class="btn btn-ghost btn-sm" onclick="fpFinishRun()" title="Finish the current run">✔ Finish Run</button>
       <div class="topbar-sep"></div>
+      <button class="btn btn-ghost btn-sm fp-mode-btn" id="fp-btn-text" onclick="fpSetMode('text')" title="Click on the floorplan to place a text label">🔤 Add Text</button>
+      <div class="topbar-sep"></div>
       <button class="btn btn-ghost btn-sm" onclick="fpClearAll()" style="color:var(--danger)">🗑 Clear All</button>
       <div class="topbar-sep"></div>
       <div style="display:flex;gap:2px;border:1px solid var(--border);border-radius:6px;padding:2px">
@@ -802,6 +811,7 @@
     <div class="fp-body" id="fp-body" style="display:none">
       <div class="fp-canvas-wrap" id="fp-canvas-wrap">
         <canvas id="fp-canvas"></canvas>
+        <div id="fp-textboxes" style="position:absolute;top:0;left:0;pointer-events:none"></div>
       </div>
       <div class="fp-sidebar">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:10px">Cable Runs</div>
@@ -5021,6 +5031,16 @@ let fpMousePos = null;
 let fpSelectedRun = null; // index into fpRuns, or null — click a finished run's line to select it
 let fpDragPoint = null;   // index of the waypoint of fpSelectedRun currently being dragged, or null
 let fpRunColorIdx = 0;
+// Freeform text labels overlaid on the floorplan image — DOM elements (not
+// canvas-drawn) so they can be edited/dragged/resized like the diagram's
+// own nodes. [{id,x,y,w,h,text,fontSize}], content-space px, per sheet
+// (synced in fpSyncActiveSheetFromLive/fpLoadActiveSheetIntoLive like fpRuns).
+// Reading sheet.textBoxes always falls back to [] so sheets saved before
+// this feature existed load unaffected.
+let fpTextBoxes = [];
+let fpTextBoxNextId = 1;
+let fpDragTextBox = null;   // {id, offX, offY} while moving a text box
+let fpResizeTextBox = null; // {id, startW, startH, startFontSize, startX, startY} while resizing one
 const FP_COLORS = ['#e74c3c','#3498db','#2ecc71','#f1c40f','#9b59b6','#1abc9c','#e67e22','#e91e63','#00bcd4'];
 
 // Display unit for the floorplan measurer — a per-viewer preference (like
@@ -5068,6 +5088,7 @@ function fpInit() {
   document.getElementById('fp-units-metric')?.classList.toggle('active', fpUnits === 'metric');
   document.getElementById('fp-units-imperial')?.classList.toggle('active', fpUnits === 'imperial');
   fpRenderTabs();
+  fpRenderTextBoxes();
   fpUpdateSidebar();
 }
 
@@ -5145,6 +5166,7 @@ function fpSyncActiveSheetFromLive() {
   sheet.scale = fpScale;
   sheet.runs = fpRuns;
   sheet.runColorIdx = fpRunColorIdx;
+  sheet.textBoxes = fpTextBoxes;
 }
 
 // Loads fpSheets[fpActiveSheetIdx] into the live working state, resetting
@@ -5155,9 +5177,12 @@ function fpLoadActiveSheetIntoLive(cb) {
   fpScale = typeof sheet.scale === 'number' ? sheet.scale : null;
   fpRuns = sheet.runs || [];
   fpRunColorIdx = sheet.runColorIdx || 0;
+  fpTextBoxes = sheet.textBoxes || [];
   fpSelectedRun = null; fpDragPoint = null; fpCurrentRun = null; fpMode = 'idle';
+  fpDragTextBox = null; fpResizeTextBox = null;
   document.querySelectorAll('.fp-mode-btn').forEach(b => b.classList.remove('active'));
   fpSetImageFromDataURL(sheet.img || null, cb);
+  fpRenderTextBoxes();
 }
 
 function fpSave() {
@@ -5277,7 +5302,7 @@ function fpSetMode(mode) {
   }
 
   document.querySelectorAll('.fp-mode-btn').forEach(b => b.classList.remove('active'));
-  const activeBtn = mode === 'scale1' ? 'fp-btn-scale' : mode === 'draw' ? 'fp-btn-draw' : null;
+  const activeBtn = mode === 'scale1' ? 'fp-btn-scale' : mode === 'draw' ? 'fp-btn-draw' : mode === 'text' ? 'fp-btn-text' : null;
   if (activeBtn) document.getElementById(activeBtn)?.classList.add('active');
   fpRedraw();
 }
@@ -5344,6 +5369,8 @@ function fpOnClick(e) {
   } else if (fpMode === 'draw' && fpCurrentRun) {
     fpCurrentRun.points.push(p);
     fpRedraw();
+  } else if (fpMode === 'text') {
+    fpAddTextBoxAt(p.x, p.y);
   } else if (fpMode === 'idle') {
     // Click a finished run's line to select it (topmost wins); click empty
     // space to deselect. Once selected, its waypoints become draggable —
@@ -5585,6 +5612,113 @@ function fpClearAll() {
   fpUpdateSidebar();
   fpSave();
 }
+
+// ---- Text labels (freeform, draggable/resizable DOM boxes over the image) ----
+function fpFindTextBox(id) { return fpTextBoxes.find(t => t.id === id); }
+
+function fpAddTextBoxAt(x, y) {
+  const box = { id: fpTextBoxNextId++, x: x - 70, y: y - 20, w: 140, h: 40, text: 'Label', fontSize: 16 };
+  fpTextBoxes.push(box);
+  fpMode = 'idle';
+  document.querySelectorAll('.fp-mode-btn').forEach(b => b.classList.remove('active'));
+  fpRenderTextBoxes();
+  fpSave();
+  // Focus the new box's text and select it all, so typing a label is immediate.
+  requestAnimationFrame(() => {
+    const textEl = document.querySelector(`#fp-tb-${box.id} .fp-tb-text`);
+    if (!textEl) return;
+    textEl.focus();
+    const range = document.createRange();
+    range.selectNodeContents(textEl);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+  });
+}
+
+function fpDeleteTextBox(id) {
+  fpTextBoxes = fpTextBoxes.filter(t => t.id !== id);
+  fpRenderTextBoxes();
+  fpSave();
+}
+
+function fpRenderTextBoxes() {
+  const container = document.getElementById('fp-textboxes');
+  if (!container) return;
+  container.innerHTML = fpTextBoxes.map(tb => `
+    <div class="fp-textbox" id="fp-tb-${tb.id}" style="left:${tb.x}px;top:${tb.y}px;width:${tb.w}px;height:${tb.h}px">
+      <div class="fp-tb-text" contenteditable="true" spellcheck="false" style="font-size:${tb.fontSize}px">${escHtml(tb.text)}</div>
+      <button class="fp-tb-close" title="Delete label">×</button>
+      <div class="fp-tb-resize" title="Drag to resize"></div>
+    </div>
+  `).join('');
+  fpTextBoxes.forEach(tb => fpBindTextBoxEvents(tb.id));
+}
+
+function fpBindTextBoxEvents(id) {
+  const el = document.getElementById('fp-tb-' + id);
+  if (!el) return;
+  const textEl = el.querySelector('.fp-tb-text');
+  const closeBtn = el.querySelector('.fp-tb-close');
+  const resizeHandle = el.querySelector('.fp-tb-resize');
+
+  // Drag to move — mousedown anywhere on the box except while actively
+  // editing the text, the resize handle, or the delete button.
+  el.addEventListener('mousedown', e => {
+    if (e.target === resizeHandle || e.target === closeBtn) return;
+    if (e.target === textEl) return; // let a click into the text position the caret instead of dragging
+    const box = fpFindTextBox(id); if (!box) return;
+    e.preventDefault();
+    fpDragTextBox = { id, startX: e.clientX, startY: e.clientY, origX: box.x, origY: box.y };
+  });
+
+  textEl.addEventListener('mousedown', e => e.stopPropagation());
+  textEl.addEventListener('blur', () => {
+    const box = fpFindTextBox(id); if (!box) return;
+    box.text = textEl.innerText.trim() || 'Label';
+    fpSave();
+  });
+  textEl.addEventListener('keydown', e => {
+    e.stopPropagation(); // don't let Enter/Ctrl+Z bubble to the draw-tool shortcuts
+    if (e.key === 'Enter') { e.preventDefault(); textEl.blur(); }
+    if (e.key === 'Escape') { textEl.blur(); }
+  });
+
+  closeBtn.addEventListener('click', e => { e.stopPropagation(); fpDeleteTextBox(id); });
+
+  resizeHandle.addEventListener('mousedown', e => {
+    e.preventDefault(); e.stopPropagation();
+    const box = fpFindTextBox(id); if (!box) return;
+    fpResizeTextBox = { id, startX: e.clientX, startY: e.clientY, startW: box.w, startH: box.h, startFontSize: box.fontSize };
+  });
+}
+
+// Live drag/resize tracking — document-scoped since the cursor can move
+// outside the small box element mid-drag.
+document.addEventListener('mousemove', e => {
+  if (fpDragTextBox) {
+    const { id, startX, startY, origX, origY } = fpDragTextBox;
+    const box = fpFindTextBox(id); if (!box) return;
+    box.x = origX + (e.clientX - startX);
+    box.y = origY + (e.clientY - startY);
+    const el = document.getElementById('fp-tb-' + id);
+    if (el) { el.style.left = box.x + 'px'; el.style.top = box.y + 'px'; }
+  } else if (fpResizeTextBox) {
+    const { id, startX, startY, startW, startH, startFontSize } = fpResizeTextBox;
+    const box = fpFindTextBox(id); if (!box) return;
+    box.w = Math.max(30, startW + (e.clientX - startX));
+    box.h = Math.max(20, startH + (e.clientY - startY));
+    box.fontSize = Math.max(8, Math.round(startFontSize * (box.h / startH)));
+    const el = document.getElementById('fp-tb-' + id);
+    if (el) {
+      el.style.width = box.w + 'px'; el.style.height = box.h + 'px';
+      const textEl = el.querySelector('.fp-tb-text');
+      if (textEl) textEl.style.fontSize = box.fontSize + 'px';
+    }
+  }
+});
+document.addEventListener('mouseup', () => {
+  if (fpDragTextBox) { fpDragTextBox = null; fpSave(); }
+  if (fpResizeTextBox) { fpResizeTextBox = null; fpSave(); }
+});
 
 // Enter finishes the run currently being drawn (same as clicking "Finish
 // Run" / double-clicking); Ctrl+Z removes just the last-placed waypoint so
