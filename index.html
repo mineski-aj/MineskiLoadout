@@ -5653,12 +5653,28 @@ function fpRenderTextBoxes() {
   fpTextBoxes.forEach(tb => fpBindTextBoxEvents(tb.id));
 }
 
+// Shrinks the *displayed* font size — never box.fontSize itself, which
+// stays the user's resize-set target — until the text fits inside the
+// box, always starting back from that target size so it grows back too
+// once text is shortened or the box is enlarged again.
+function fpAutoFitText(textEl, box) {
+  const MIN_SIZE = 8;
+  let size = box.fontSize;
+  textEl.style.fontSize = size + 'px';
+  while (size > MIN_SIZE && (textEl.scrollHeight > textEl.clientHeight + 1 || textEl.scrollWidth > textEl.clientWidth + 1)) {
+    size -= 1;
+    textEl.style.fontSize = size + 'px';
+  }
+}
+
 function fpBindTextBoxEvents(id) {
   const el = document.getElementById('fp-tb-' + id);
   if (!el) return;
   const textEl = el.querySelector('.fp-tb-text');
   const closeBtn = el.querySelector('.fp-tb-close');
   const resizeHandle = el.querySelector('.fp-tb-resize');
+  const box = fpFindTextBox(id);
+  if (box) fpAutoFitText(textEl, box);
 
   // Drag to move — mousedown anywhere on the box except while actively
   // editing the text, the resize handle, or the delete button.
@@ -5671,6 +5687,9 @@ function fpBindTextBoxEvents(id) {
   });
 
   textEl.addEventListener('mousedown', e => e.stopPropagation());
+  textEl.addEventListener('input', () => {
+    const b = fpFindTextBox(id); if (b) fpAutoFitText(textEl, b);
+  });
   textEl.addEventListener('blur', () => {
     const box = fpFindTextBox(id); if (!box) return;
     box.text = textEl.innerText.trim() || 'Label';
@@ -5711,7 +5730,7 @@ document.addEventListener('mousemove', e => {
     if (el) {
       el.style.width = box.w + 'px'; el.style.height = box.h + 'px';
       const textEl = el.querySelector('.fp-tb-text');
-      if (textEl) textEl.style.fontSize = box.fontSize + 'px';
+      if (textEl) fpAutoFitText(textEl, box);
     }
   }
 });
