@@ -356,8 +356,19 @@
   .fp-canvas-wrap { flex: 1; overflow: auto; background: #111; position: relative; cursor: crosshair; }
   .fp-canvas-wrap canvas { display: block; max-width: none; }
   .fp-sidebar { width: 220px; flex-shrink: 0; overflow-y: auto; background: var(--surface2); border-left: 1px solid var(--border); padding: 12px; }
-  .fp-run-item { background: var(--surface3); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+  .fp-run-item { background: var(--surface3); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
+  .fp-run-item.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .fp-tabs { display: flex; align-items: center; gap: 4px; padding: 6px 14px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; flex-shrink: 0; }
+  .fp-tab { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 6px; background: var(--surface2); border: 1px solid var(--border); cursor: pointer; font-size: 12px; color: var(--text-muted); }
+  .fp-tab:hover { background: var(--surface3); color: var(--text); }
+  .fp-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .fp-tab-name { white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+  .fp-tab-close { background: none; border: none; color: inherit; opacity: 0.6; cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
+  .fp-tab-close:hover { opacity: 1; }
+  .fp-tab-add { padding: 5px 10px; border-radius: 6px; background: var(--surface2); border: 1px dashed var(--border); color: var(--text-muted); cursor: pointer; font-size: 13px; }
+  .fp-tab-add:hover { background: var(--surface3); color: var(--text); }
   .fp-mode-btn.active { background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }
+  .fp-units-btn.active { background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }
   .io-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 28px; }
   .io-card { border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
   .io-card-header { background: #c8860a; color: #fff; text-align: center; font-weight: 700; font-size: 14px; padding: 9px 14px; letter-spacing: 0.04em; }
@@ -780,7 +791,13 @@
       <button class="btn btn-ghost btn-sm" onclick="fpFinishRun()" title="Finish the current run">✔ Finish Run</button>
       <div class="topbar-sep"></div>
       <button class="btn btn-ghost btn-sm" onclick="fpClearAll()" style="color:var(--danger)">🗑 Clear All</button>
+      <div class="topbar-sep"></div>
+      <div style="display:flex;gap:2px;border:1px solid var(--border);border-radius:6px;padding:2px">
+        <button class="btn btn-ghost btn-sm fp-units-btn" id="fp-units-metric" onclick="fpSetUnits('metric')" title="Show lengths in meters" style="padding:4px 9px">Metric</button>
+        <button class="btn btn-ghost btn-sm fp-units-btn" id="fp-units-imperial" onclick="fpSetUnits('imperial')" title="Show lengths in feet" style="padding:4px 9px">Imperial</button>
+      </div>
     </div>
+    <div class="fp-tabs" id="fp-tabs"></div>
     <div class="fp-hint" id="fp-hint">Import a floorplan image to get started. Then set scale and draw cable runs.</div>
     <div class="fp-body" id="fp-body" style="display:none">
       <div class="fp-canvas-wrap" id="fp-canvas-wrap">
@@ -1159,12 +1176,14 @@ function updateProjectLabel() {
 
 // Bundles every syncable piece of app state into one plain object.
 function gatherProjectData() {
+  fpSyncActiveSheetFromLive();
   return {
     nodes, edges, nid, eid,
     invRows, invRid,
     ioTables, ioTid,
     comm: commState || COMM_DEFAULTS(),
-    org: orgState || ORG_DEFAULTS()
+    org: orgState || ORG_DEFAULTS(),
+    floorplan: { sheets: fpSheets, activeIdx: fpActiveSheetIdx, nextId: fpSheetNextId }
   };
 }
 
@@ -1177,11 +1196,23 @@ function applyProjectData(d) {
   ioTables = d.ioTables || []; ioTid = d.ioTid || 1;
   commState = d.comm || COMM_DEFAULTS();
   orgState = d.org || ORG_DEFAULTS();
-  saveState(); saveInventory(); saveIOTables(); commSave(); orgSave();
+  const fp = d.floorplan || {};
+  if (fp.sheets && fp.sheets.length) {
+    fpSheets = fp.sheets;
+    fpActiveSheetIdx = Math.min(fp.activeIdx || 0, fpSheets.length - 1);
+    fpSheetNextId = fp.nextId || (fpSheets.length + 1);
+  } else {
+    fpSheets = [{ id: 1, name: 'Floorplan 1', img: null, scale: null, runs: [], runColorIdx: 0 }];
+    fpActiveSheetIdx = 0; fpSheetNextId = 2;
+  }
+  fpLoadActiveSheetIntoLive();
+  fpRenderTabs();
+  saveState(); saveInventory(); saveIOTables(); commSave(); orgSave(); fpSave();
   renderBroadcastInventory();
   renderIOList();
   renderCommPlot();
   renderOrgChart();
+  fpUpdateSidebar();
   history = []; histIdx = -1; pushHistory();
   // saveState()/saveInventory() debounce their local write 400ms out — hold
   // the guard past that so hydrating a project never bounces its own data
@@ -4967,6 +4998,17 @@ function renderIOList() {
 // ============================================================
 // FLOORPLAN / SDI CALCULATOR
 // ============================================================
+// Multiple floorplan "tabs" per project. Each sheet is the serializable
+// {id,name,img,scale,runColorIdx,runs} bundle; fpImage/fpScale/fpRuns/etc.
+// below remain the live working state for whichever sheet is active —
+// every existing draw/select/drag function keeps operating on those
+// unchanged. Switching tabs just syncs the live state into/out of
+// fpSheets[fpActiveSheetIdx] (see fpSyncActiveSheetFromLive/
+// fpLoadActiveSheetIntoLive).
+let fpSheets = [{ id: 1, name: 'Floorplan 1', img: null, scale: null, runs: [], runColorIdx: 0 }];
+let fpActiveSheetIdx = 0;
+let fpSheetNextId = 2;
+
 let fpImage = null;
 let fpScale = null;          // pixels per meter
 let fpRuns = [];             // [{id,name,points,color,cableType}]
@@ -4976,8 +5018,36 @@ let fpScaleP1 = null;
 let fpCanvas = null;
 let fpCtx = null;
 let fpMousePos = null;
+let fpSelectedRun = null; // index into fpRuns, or null — click a finished run's line to select it
+let fpDragPoint = null;   // index of the waypoint of fpSelectedRun currently being dragged, or null
 let fpRunColorIdx = 0;
 const FP_COLORS = ['#e74c3c','#3498db','#2ecc71','#f1c40f','#9b59b6','#1abc9c','#e67e22','#e91e63','#00bcd4'];
+
+// Display unit for the floorplan measurer — a per-viewer preference (like
+// theme), not project data, so it's local-only and never synced: two
+// teammates can each view the same shared runs in their own preferred
+// units. All storage/scale math stays in meters regardless of this setting.
+let fpUnits = (() => { try { return localStorage.getItem('bfw_fp_units') === 'imperial' ? 'imperial' : 'metric'; } catch(e) { return 'metric'; } })();
+const FP_M_PER_FT = 0.3048;
+function fpFormatLen(m) { return fpUnits === 'imperial' ? (m / FP_M_PER_FT).toFixed(2) + ' ft' : m.toFixed(2) + ' m'; }
+function fpToMeters(v) { return fpUnits === 'imperial' ? v * FP_M_PER_FT : v; }
+function fpScaleBadgeText() {
+  if (!fpScale) return 'Scale: not set';
+  return fpUnits === 'imperial'
+    ? `Scale: 1 ft = ${(fpScale * FP_M_PER_FT).toFixed(1)} px`
+    : `Scale: 1 m = ${fpScale.toFixed(1)} px`;
+}
+function fpSetUnits(u) {
+  if (u !== 'metric' && u !== 'imperial') return;
+  fpUnits = u;
+  try { localStorage.setItem('bfw_fp_units', u); } catch(e) {}
+  document.getElementById('fp-units-metric')?.classList.toggle('active', u === 'metric');
+  document.getElementById('fp-units-imperial')?.classList.toggle('active', u === 'imperial');
+  const badge = document.getElementById('fp-scale-badge');
+  if (badge) badge.textContent = fpScaleBadgeText();
+  fpRedraw();
+  fpUpdateSidebar();
+}
 
 function fpInit() {
   fpCanvas = document.getElementById('fp-canvas');
@@ -4986,6 +5056,8 @@ function fpInit() {
   fpCanvas.addEventListener('click', fpOnClick);
   fpCanvas.addEventListener('dblclick', fpOnDblClick);
   fpCanvas.addEventListener('mousemove', fpOnMouseMove);
+  fpCanvas.addEventListener('mousedown', fpOnMouseDown);
+  document.addEventListener('mouseup', fpOnMouseUp);
   const wrap = document.getElementById('fp-canvas-wrap');
   wrap.addEventListener('dragover', e => e.preventDefault());
   wrap.addEventListener('drop', e => {
@@ -4993,6 +5065,9 @@ function fpInit() {
     const f = e.dataTransfer.files[0];
     if (f && f.type.startsWith('image/')) fpLoadFile(f);
   });
+  document.getElementById('fp-units-metric')?.classList.toggle('active', fpUnits === 'metric');
+  document.getElementById('fp-units-imperial')?.classList.toggle('active', fpUnits === 'imperial');
+  fpRenderTabs();
   fpUpdateSidebar();
 }
 
@@ -5008,16 +5083,175 @@ function fpLoadFile(file) {
   reader.onload = ev => {
     const img = new Image();
     img.onload = () => {
-      fpImage = img;
-      fpCanvas.width  = img.naturalWidth;
-      fpCanvas.height = img.naturalHeight;
-      document.getElementById('fp-hint').style.display = 'none';
-      document.getElementById('fp-body').style.display = '';
-      fpRedraw();
+      // Downscale before storing — this image gets synced to Firestore as
+      // part of the project doc (1 MiB/doc cap), so an uncompressed photo
+      // straight off a phone could blow the size budget for the whole
+      // project, not just the floorplan.
+      const MAX_DIM = 1800;
+      const s = Math.min(1, MAX_DIM / Math.max(img.naturalWidth, img.naturalHeight));
+      const cw = Math.max(1, Math.round(img.naturalWidth * s));
+      const ch = Math.max(1, Math.round(img.naturalHeight * s));
+      const tmp = document.createElement('canvas');
+      tmp.width = cw; tmp.height = ch;
+      tmp.getContext('2d').drawImage(img, 0, 0, cw, ch);
+      const dataUrl = tmp.toDataURL('image/jpeg', 0.85);
+      fpSetImageFromDataURL(dataUrl, fpSave);
     };
     img.src = ev.target.result;
   };
   reader.readAsDataURL(file);
+}
+
+// ---- Floorplan persistence ----
+// Restores (or clears, if dataUrl is falsy) the floorplan image, resizing
+// the canvas and refreshing the hint/scale UI to match. Grabs fpCanvas/fpCtx
+// defensively since this can run before fpInit() has (e.g. a project loads
+// before DOMContentLoaded fires fpInit).
+function fpSetImageFromDataURL(dataUrl, cb) {
+  if (!fpCanvas) fpCanvas = document.getElementById('fp-canvas');
+  const hint = document.getElementById('fp-hint'), body = document.getElementById('fp-body');
+  if (!dataUrl) {
+    fpImage = null;
+    if (hint) hint.style.display = '';
+    if (body) body.style.display = 'none';
+    if (cb) cb();
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    fpImage = img;
+    if (fpCanvas) {
+      fpCanvas.width  = img.naturalWidth;
+      fpCanvas.height = img.naturalHeight;
+      if (!fpCtx) fpCtx = fpCanvas.getContext('2d');
+    }
+    if (hint) hint.style.display = 'none';
+    if (body) body.style.display = '';
+    const badge = document.getElementById('fp-scale-badge');
+    if (badge) badge.textContent = fpScaleBadgeText();
+    fpRedraw();
+    if (cb) cb();
+  };
+  img.src = dataUrl;
+}
+
+// Writes the live working state (fpImage/fpScale/fpRuns/fpRunColorIdx) back
+// into the sheet it belongs to — call this before reading fpSheets for
+// saving, or before switching away from the active sheet.
+function fpSyncActiveSheetFromLive() {
+  const sheet = fpSheets[fpActiveSheetIdx];
+  if (!sheet) return;
+  sheet.img = fpImage ? fpImage.src : null;
+  sheet.scale = fpScale;
+  sheet.runs = fpRuns;
+  sheet.runColorIdx = fpRunColorIdx;
+}
+
+// Loads fpSheets[fpActiveSheetIdx] into the live working state, resetting
+// any in-progress interaction (drawing/selection/dragging) since those are
+// scoped to whichever sheet was previously active.
+function fpLoadActiveSheetIntoLive(cb) {
+  const sheet = fpSheets[fpActiveSheetIdx] || fpSheets[0];
+  fpScale = typeof sheet.scale === 'number' ? sheet.scale : null;
+  fpRuns = sheet.runs || [];
+  fpRunColorIdx = sheet.runColorIdx || 0;
+  fpSelectedRun = null; fpDragPoint = null; fpCurrentRun = null; fpMode = 'idle';
+  document.querySelectorAll('.fp-mode-btn').forEach(b => b.classList.remove('active'));
+  fpSetImageFromDataURL(sheet.img || null, cb);
+}
+
+function fpSave() {
+  fpSyncActiveSheetFromLive();
+  try {
+    localStorage.setItem('bfw-floorplan', JSON.stringify({
+      sheets: fpSheets, activeIdx: fpActiveSheetIdx, nextId: fpSheetNextId
+    }));
+  } catch(e) {}
+  scheduleCloudSave();
+}
+
+function fpLoad() {
+  const DEFAULT_SHEETS = () => [{ id: 1, name: 'Floorplan 1', img: null, scale: null, runs: [], runColorIdx: 0 }];
+  try {
+    const d = JSON.parse(localStorage.getItem('bfw-floorplan') || '{}');
+    if (d.sheets && Array.isArray(d.sheets) && d.sheets.length) {
+      fpSheets = d.sheets;
+      fpActiveSheetIdx = Math.min(d.activeIdx || 0, fpSheets.length - 1);
+      fpSheetNextId = d.nextId || (fpSheets.length + 1);
+    } else if (d.img || typeof d.scale === 'number' || (d.runs && d.runs.length)) {
+      // Legacy single-floorplan format (pre-tabs) — migrate into one sheet.
+      fpSheets = [{ id: 1, name: 'Floorplan 1', img: d.img || null, scale: typeof d.scale==='number'?d.scale:null, runs: d.runs || [], runColorIdx: d.runColorIdx || 0 }];
+      fpActiveSheetIdx = 0;
+      fpSheetNextId = 2;
+    } else {
+      fpSheets = DEFAULT_SHEETS();
+      fpActiveSheetIdx = 0; fpSheetNextId = 2;
+    }
+  } catch(e) {
+    fpSheets = DEFAULT_SHEETS();
+    fpActiveSheetIdx = 0; fpSheetNextId = 2;
+  }
+  fpLoadActiveSheetIntoLive();
+  fpRenderTabs();
+}
+
+function fpRenderTabs() {
+  const el = document.getElementById('fp-tabs');
+  if (!el) return;
+  el.innerHTML = fpSheets.map((s, i) => `
+    <div class="fp-tab${i===fpActiveSheetIdx?' active':''}" onclick="fpSwitchSheet(${i})">
+      <span class="fp-tab-name" ondblclick="event.stopPropagation();fpRenameSheet(${i})" title="Double-click to rename">${escHtml(s.name)}</span>
+      ${fpSheets.length > 1 ? `<button class="fp-tab-close" onclick="event.stopPropagation();fpDeleteSheet(${i})" title="Delete this floorplan">×</button>` : ''}
+    </div>
+  `).join('') + `<button class="fp-tab-add" onclick="fpAddSheet()" title="Add another floorplan">+ Add</button>`;
+}
+
+function fpSwitchSheet(idx) {
+  if (idx === fpActiveSheetIdx || !fpSheets[idx]) return;
+  fpSyncActiveSheetFromLive();
+  fpActiveSheetIdx = idx;
+  fpRenderTabs();
+  fpLoadActiveSheetIntoLive(() => { fpRedraw(); });
+  fpUpdateSidebar();
+  const badge = document.getElementById('fp-scale-badge');
+  if (badge) badge.textContent = fpScaleBadgeText();
+}
+
+function fpAddSheet() {
+  const name = prompt('New floorplan name:', 'Floorplan ' + (fpSheets.length + 1));
+  if (name === null) return;
+  fpSyncActiveSheetFromLive();
+  fpSheets.push({ id: fpSheetNextId++, name: name.trim() || ('Floorplan ' + (fpSheets.length + 1)), img: null, scale: null, runs: [], runColorIdx: 0 });
+  fpActiveSheetIdx = fpSheets.length - 1;
+  fpRenderTabs();
+  fpLoadActiveSheetIntoLive(() => { fpRedraw(); });
+  fpUpdateSidebar();
+  fpSave();
+}
+
+function fpRenameSheet(idx) {
+  const sheet = fpSheets[idx]; if (!sheet) return;
+  const name = prompt('Rename floorplan:', sheet.name);
+  if (name === null || !name.trim()) return;
+  sheet.name = name.trim();
+  fpRenderTabs();
+  fpSave();
+}
+
+function fpDeleteSheet(idx) {
+  if (fpSheets.length <= 1) { alert('You need at least one floorplan tab.'); return; }
+  if (!confirm(`Delete "${fpSheets[idx].name}"? This cannot be undone.`)) return;
+  fpSheets.splice(idx, 1);
+  if (fpActiveSheetIdx === idx) {
+    fpActiveSheetIdx = Math.max(0, idx - 1);
+    fpRenderTabs();
+    fpLoadActiveSheetIntoLive(() => { fpRedraw(); });
+    fpUpdateSidebar();
+  } else {
+    if (fpActiveSheetIdx > idx) fpActiveSheetIdx--;
+    fpRenderTabs();
+  }
+  fpSave();
 }
 
 function fpSetMode(mode) {
@@ -5025,6 +5259,7 @@ function fpSetMode(mode) {
   if (fpMode === 'draw' && fpCurrentRun && fpCurrentRun.points.length >= 2) {
     fpRuns.push(fpCurrentRun);
     fpUpdateSidebar();
+    fpSave();
   }
   fpCurrentRun = null;
   fpScaleP1 = null;
@@ -5055,6 +5290,35 @@ function fpGetPos(e) {
   };
 }
 
+// ---- Hit-testing for selecting a finished run and dragging its waypoints ----
+function fpDistToSegment(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const lenSq = dx*dx + dy*dy;
+  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x)*dx + (p.y - a.y)*dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t*dx), p.y - (a.y + t*dy));
+}
+function fpHitTestRun(run, p, threshold = 8) {
+  if (!run.points.length) return false;
+  if (run.points.length === 1) return Math.hypot(run.points[0].x - p.x, run.points[0].y - p.y) <= threshold;
+  for (let i = 1; i < run.points.length; i++) {
+    if (fpDistToSegment(p, run.points[i-1], run.points[i]) <= threshold) return true;
+  }
+  return false;
+}
+function fpHitTestPoint(run, p, radius = 10) {
+  for (let i = 0; i < run.points.length; i++) {
+    if (Math.hypot(run.points[i].x - p.x, run.points[i].y - p.y) <= radius) return i;
+  }
+  return -1;
+}
+function fpSelectRun(idx) {
+  fpSelectedRun = idx;
+  fpRedraw();
+  fpUpdateSidebar();
+}
+
 function fpOnClick(e) {
   if (!fpImage || e.detail >= 2) return;
   const p = fpGetPos(e);
@@ -5064,12 +5328,14 @@ function fpOnClick(e) {
     fpRedraw();
   } else if (fpMode === 'scale2') {
     const px = Math.hypot(p.x - fpScaleP1.x, p.y - fpScaleP1.y);
-    const ans = prompt('Real-world distance between those two points (meters):', '5');
-    const m = parseFloat(ans);
-    if (!isNaN(m) && m > 0) {
-      fpScale = px / m;
+    const unitWord = fpUnits === 'imperial' ? 'feet' : 'meters';
+    const ans = prompt(`Real-world distance between those two points (${unitWord}):`, fpUnits === 'imperial' ? '16' : '5');
+    const v = parseFloat(ans);
+    if (!isNaN(v) && v > 0) {
+      fpScale = px / fpToMeters(v);
       const badge = document.getElementById('fp-scale-badge');
-      if (badge) badge.textContent = `Scale: 1 m = ${fpScale.toFixed(1)} px`;
+      if (badge) badge.textContent = fpScaleBadgeText();
+      fpSave();
     }
     fpMode = 'idle';
     fpScaleP1 = null;
@@ -5078,6 +5344,15 @@ function fpOnClick(e) {
   } else if (fpMode === 'draw' && fpCurrentRun) {
     fpCurrentRun.points.push(p);
     fpRedraw();
+  } else if (fpMode === 'idle') {
+    // Click a finished run's line to select it (topmost wins); click empty
+    // space to deselect. Once selected, its waypoints become draggable —
+    // see fpOnMouseDown.
+    let hitIdx = -1;
+    for (let i = fpRuns.length - 1; i >= 0; i--) {
+      if (fpHitTestRun(fpRuns[i], p)) { hitIdx = i; break; }
+    }
+    fpSelectRun(hitIdx === -1 ? null : hitIdx);
   }
 }
 
@@ -5088,6 +5363,7 @@ function fpOnDblClick(e) {
   if (fpCurrentRun.points.length >= 2) {
     fpRuns.push(fpCurrentRun);
     fpUpdateSidebar();
+    fpSave();
   }
   fpCurrentRun = null;
   fpMode = 'idle';
@@ -5100,6 +5376,7 @@ function fpFinishRun() {
   if (fpCurrentRun.points.length >= 2) {
     fpRuns.push(fpCurrentRun);
     fpUpdateSidebar();
+    fpSave();
   }
   fpCurrentRun = null;
   fpMode = 'idle';
@@ -5110,10 +5387,37 @@ function fpFinishRun() {
 function fpOnMouseMove(e) {
   if (!fpImage) return;
   fpMousePos = fpGetPos(e);
+  if (fpDragPoint !== null && fpSelectedRun !== null && fpRuns[fpSelectedRun]) {
+    fpRuns[fpSelectedRun].points[fpDragPoint] = fpMousePos;
+    fpRedraw();
+    return;
+  }
+  if (fpMode === 'idle' && fpSelectedRun !== null && fpRuns[fpSelectedRun]) {
+    fpCanvas.style.cursor = fpHitTestPoint(fpRuns[fpSelectedRun], fpMousePos) !== -1 ? 'grab' : 'crosshair';
+  }
   if ((fpMode === 'draw' && fpCurrentRun && fpCurrentRun.points.length > 0) ||
       (fpMode === 'scale2' && fpScaleP1)) {
     fpRedraw();
   }
+}
+
+function fpOnMouseDown(e) {
+  if (!fpImage || fpMode !== 'idle' || fpSelectedRun === null || !fpRuns[fpSelectedRun]) return;
+  const p = fpGetPos(e);
+  const hitIdx = fpHitTestPoint(fpRuns[fpSelectedRun], p);
+  if (hitIdx !== -1) {
+    fpDragPoint = hitIdx;
+    fpCanvas.style.cursor = 'grabbing';
+    e.preventDefault();
+  }
+}
+
+function fpOnMouseUp() {
+  if (fpDragPoint === null) return;
+  fpDragPoint = null;
+  fpCanvas.style.cursor = 'crosshair';
+  fpUpdateSidebar(); // run length changed
+  fpSave();
 }
 
 function fpRunLength(run) {
@@ -5130,7 +5434,7 @@ function fpRedraw() {
   c.clearRect(0, 0, fpCanvas.width, fpCanvas.height);
   c.drawImage(fpImage, 0, 0);
 
-  fpRuns.forEach(r => fpDrawRun(c, r, false));
+  fpRuns.forEach((r, i) => fpDrawRun(c, r, false, i === fpSelectedRun));
 
   if (fpCurrentRun) {
     fpDrawRun(c, fpCurrentRun, true);
@@ -5143,7 +5447,7 @@ function fpRedraw() {
       if (fpScale) {
         const seg = Math.hypot(fpMousePos.x - last.x, fpMousePos.y - last.y) / fpScale;
         fpLabel(c, (last.x + fpMousePos.x)/2, (last.y + fpMousePos.y)/2 - 14,
-          seg.toFixed(2) + ' m', fpCurrentRun.color);
+          fpFormatLen(seg), fpCurrentRun.color);
       }
     }
   }
@@ -5157,14 +5461,25 @@ function fpRedraw() {
       c.setLineDash([]);
       const px = Math.hypot(fpMousePos.x - fpScaleP1.x, fpMousePos.y - fpScaleP1.y);
       fpLabel(c, fpMousePos.x, fpMousePos.y - 14,
-        fpScale ? (px/fpScale).toFixed(2)+' m' : px.toFixed(0)+' px', '#ffffff');
+        fpScale ? fpFormatLen(px/fpScale) : px.toFixed(0)+' px', '#ffffff');
     }
   }
 }
 
-function fpDrawRun(c, run, isCurrent) {
+function fpDrawRun(c, run, isCurrent, isSelected) {
   if (!run.points.length) return;
   if (run.points.length > 1) {
+    if (isSelected) {
+      // Selection halo — a soft white outline behind the run's own line.
+      c.beginPath();
+      c.strokeStyle = '#ffffff'; c.lineWidth = 6;
+      c.globalAlpha = 0.35;
+      c.lineJoin = 'round'; c.lineCap = 'round';
+      c.moveTo(run.points[0].x, run.points[0].y);
+      run.points.slice(1).forEach(p => c.lineTo(p.x, p.y));
+      c.stroke();
+      c.globalAlpha = 1;
+    }
     c.beginPath();
     c.strokeStyle = run.color; c.lineWidth = isCurrent ? 3 : 2.5;
     c.lineJoin = 'round'; c.lineCap = 'round';
@@ -5172,16 +5487,22 @@ function fpDrawRun(c, run, isCurrent) {
     run.points.slice(1).forEach(p => c.lineTo(p.x, p.y));
     c.stroke();
   }
-  run.points.forEach((p, i) => fpDot(c, p, run.color, i === 0 ? 7 : 5));
+  run.points.forEach((p, i) => fpDot(c, p, run.color, i === 0 ? 7 : 5, isSelected));
   if (!isCurrent && run.points.length >= 2) {
     const len = fpRunLength(run);
     const mid = run.points[Math.floor((run.points.length - 1) / 2)];
     fpLabel(c, mid.x, mid.y - 14,
-      `${run.name}${len !== null ? ': ' + len.toFixed(2) + ' m' : ''}`, run.color);
+      `${run.name}${len !== null ? ': ' + fpFormatLen(len) : ''}`, run.color);
   }
 }
 
-function fpDot(c, p, color, r) {
+function fpDot(c, p, color, r, isDraggable) {
+  if (isDraggable) {
+    // Bigger halo ring around a selected run's waypoints, signaling they
+    // can be picked up and dragged to a new position.
+    c.beginPath(); c.arc(p.x, p.y, r + 4, 0, Math.PI*2);
+    c.fillStyle = 'rgba(255,255,255,0.9)'; c.fill();
+  }
   c.beginPath(); c.arc(p.x, p.y, r, 0, Math.PI*2);
   c.fillStyle = '#fff'; c.fill();
   c.strokeStyle = color; c.lineWidth = 2.5; c.stroke();
@@ -5212,19 +5533,19 @@ function fpUpdateSidebar() {
   let totalByType = {};
   let html = fpRuns.map((run, idx) => {
     const len = fpRunLength(run);
-    const lenStr = len !== null ? len.toFixed(2) + ' m' : '(set scale first)';
+    const lenStr = len !== null ? fpFormatLen(len) : '(set scale first)';
     if (len !== null) totalByType[run.cableType] = (totalByType[run.cableType] || 0) + len;
-    return `<div class="fp-run-item">
+    return `<div class="fp-run-item${idx===fpSelectedRun?' selected':''}" onclick="if(!event.target.closest('input,select,button'))fpSelectRun(${idx})">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
         <span style="width:11px;height:11px;border-radius:3px;background:${run.color};flex-shrink:0;display:inline-block"></span>
         <input style="background:none;border:none;outline:none;color:var(--text);font-weight:600;font-size:12px;flex:1;min-width:0"
           value="${escHtml(run.name)}"
-          onchange="fpRuns[${idx}].name=this.value;fpRedraw()">
+          onchange="fpRuns[${idx}].name=this.value;fpRedraw();fpSave()">
         <button onclick="fpDeleteRun(${idx})" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:13px;padding:0;line-height:1;flex-shrink:0">✕</button>
       </div>
       <div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:6px">${lenStr}</div>
       <select style="font-size:10px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:3px 5px;width:100%"
-        onchange="fpRuns[${idx}].cableType=this.value;fpUpdateSidebar()">
+        onchange="fpRuns[${idx}].cableType=this.value;fpUpdateSidebar();fpSave()">
         ${['SDI','HDMI','Fiber','Power','Audio','Ethernet','Other'].map(t =>
           `<option${run.cableType===t?' selected':''}>${t}</option>`).join('')}
       </select>
@@ -5237,7 +5558,7 @@ function fpUpdateSidebar() {
       ${Object.entries(totalByType).map(([type, m]) =>
         `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
           <span style="font-size:12px;color:var(--text-muted)">${type}</span>
-          <span style="font-size:14px;font-weight:700;color:var(--accent)">${m.toFixed(2)} m</span>
+          <span style="font-size:14px;font-weight:700;color:var(--accent)">${fpFormatLen(m)}</span>
         </div>`).join('')}
     </div>`;
   }
@@ -5247,17 +5568,45 @@ function fpUpdateSidebar() {
 
 function fpDeleteRun(idx) {
   fpRuns.splice(idx, 1);
+  // Keep the selection pointed at the same run where possible, and drop it
+  // if the deleted run was the selected one (or indices shifted past it).
+  if (fpSelectedRun === idx) fpSelectedRun = null;
+  else if (fpSelectedRun !== null && fpSelectedRun > idx) fpSelectedRun--;
   fpRedraw();
   fpUpdateSidebar();
+  fpSave();
 }
 
 function fpClearAll() {
   if (fpRuns.length && !confirm('Clear all cable runs?')) return;
-  fpRuns = []; fpCurrentRun = null; fpMode = 'idle';
+  fpRuns = []; fpCurrentRun = null; fpMode = 'idle'; fpSelectedRun = null; fpDragPoint = null;
   document.querySelectorAll('.fp-mode-btn').forEach(b => b.classList.remove('active'));
   fpRedraw();
   fpUpdateSidebar();
+  fpSave();
 }
+
+// Enter finishes the run currently being drawn (same as clicking "Finish
+// Run" / double-clicking); Ctrl+Z removes just the last-placed waypoint so
+// a misplaced click can be corrected without restarting the whole run.
+// Scoped to the Floorplan tab actually being visible and not mid-typing.
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('fp-panel')?.classList.contains('active')) return;
+  if (fpMode !== 'draw' || !fpCurrentRun) return;
+  const tag = document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement.contentEditable === 'true') return;
+
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    fpFinishRun();
+  } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+    e.preventDefault();
+    if (fpCurrentRun.points.length > 0) {
+      fpCurrentRun.points.pop();
+      fpRedraw();
+    }
+  }
+});
 
 // init after DOM ready
 document.addEventListener('DOMContentLoaded', fpInit);
@@ -5374,6 +5723,7 @@ loadFromStorage();
 loadIOTables();
 loadInventory();
 loadInvLogs();
+fpLoad();
 autoExpandCanvas();
 restoreScroll();
 if (!projectsCol) { const w = document.getElementById('btn-project-picker'); if (w) w.title = "Cloud sync isn't configured — projects can't be saved/shared yet."; }

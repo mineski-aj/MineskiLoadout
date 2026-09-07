@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-07
+
+### Fixed
+- **Floorplan never saved anywhere** — no localStorage, no cloud sync. It only ever lived in the browser tab's memory and vanished on refresh/close, which is why floorplan work wasn't showing up for teammates (and why it could be lost entirely). Now wired into the same save/sync pipeline as every other tab — verified end-to-end against real Firestore, including a fresh-session reopen. Floorplan images are auto-downscaled (max 1800px, re-compressed as JPEG) before syncing so a full-resolution photo doesn't blow the 1 MiB/document Firestore cap for the whole project.
+
+### Added
+- **Floorplan tabs** — multiple floorplans per project, each with its own image, scale, and cable runs, switchable like any other tab set in the app (rename via double-click, delete, add). Anyone with existing single-floorplan data gets it migrated automatically into a first tab.
+- **Metric/Imperial units toggle** on the Floorplan measurer — a per-viewer display preference (not synced project data, like theme), so each teammate can view the same shared measurements in meters or feet.
+- Floorplan drawing tool: **Enter** finishes the run you're currently drawing; **Ctrl+Z** removes just the last-placed waypoint so a misplaced click doesn't force restarting the whole run; a finished run can be **selected** (click its line or its sidebar card) and then have any of its **individual waypoints dragged** to a new position.
+
 ## 2026-09-05
 
 ### Added
